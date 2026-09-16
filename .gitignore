@@ -1,0 +1,35 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build and editor output
+build/
+dist/
+.idea/
+.vscode/
+*.swp
+
+# Runtime data and state
+data/
+logs/
+*.duckdb
+*.duckdb.*
+*.parquet
+*.json.gz
+
+# Hermes/Git parallel workspaces
+.worktrees/
+.hermes/
