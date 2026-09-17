@@ -73,3 +73,11 @@ This log is intentionally lightweight. Promote a decision to a numbered ADR when
 - **Alternatives:** Full dbt-core adoption, lightweight Jinja2 template preprocessor.
 - **Trade-offs:** No automated interactive lineage graph generator; view dependencies managed explicitly in code.
 - **Reconsider when:** Model DAG grows beyond 15 interdependent models or migration to a distributed cloud data warehouse occurs. (See `D-009_DBT_EVALUATION.md` for full evaluation).
+
+## D-010 — Isolated Bounded WebSocket Streaming Experiment
+
+- **Decision:** Implement an isolated, bounded real-time trade streaming collector for `BTC-USD` on Coinbase Exchange WebSocket without external streaming brokers (Kafka/Redis) or coupling to production batch storage.
+- **Reason:** Empirically evaluate latency advantages and operational failure modes (disconnections, out-of-order sequencing, buffer bloat) while preserving batch as the single source of truth.
+- **Alternatives:** Apache Kafka/Redpanda cluster, Redis Streams, direct write into batch Parquet partitions.
+- **Trade-offs:** Volatile uncommitted events lost on abrupt process termination; raw JSON Lines consume uncompressed disk space during experiment.
+- **Reconsider when:** Low-latency streaming is required continuously in production or cross-venue trade consolidation becomes necessary. (See `D-010_STREAMING_EXPERIMENT.md` for full evaluation).

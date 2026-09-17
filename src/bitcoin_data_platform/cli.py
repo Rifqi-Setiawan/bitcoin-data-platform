@@ -52,6 +52,10 @@ from bitcoin_data_platform.storage.raw_writer import (
     create_raw_envelope,
     write_raw_envelope,
 )
+from bitcoin_data_platform.streaming import (
+    StreamingSessionError,
+    run_streaming_session,
+)
 from bitcoin_data_platform.time_range import (
     TimeRangeError,
     format_canonical_utc,
@@ -734,6 +738,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory for curated Parquet partitions (default: ./data/curated).",
     )
 
+    # 11. stream command
+    stream_parser = subparsers.add_parser(
+        "stream",
+        help="Run bounded WebSocket trade streaming experiment for BTC-USD.",
+        description=(
+            "Capture real-time trade execution stream from Coinbase Exchange WebSocket feed, "
+            "write atomic micro-batch JSON Lines segments, compute synthetic candles, "
+            "and optionally reconcile against Coinbase REST API candles."
+        ),
+    )
+    stream_parser.add_argument(
+        "--duration",
+        type=int,
+        default=60,
+        help="Streaming capture duration in seconds (default: 60).",
+    )
+    stream_parser.add_argument(
+        "--output-dir",
+        default="./data/raw/streaming",
+        help="Root output directory for streaming runs (default: ./data/raw/streaming).",
+    )
+    stream_parser.add_argument(
+        "--reconcile",
+        action="store_true",
+        default=False,
+        help="Perform post-capture reconciliation against Coinbase REST reference candles.",
+    )
+
     return parser
 
 
@@ -743,6 +775,7 @@ def main(
     clock: Callable[[], datetime] | None = None,
     client: CoinbaseClient | None = None,
     network_client: CoinMetricsClient | None = None,
+    connect_factory: Any = None,
 ) -> int:
     parser = build_parser()
     if argv is None:
@@ -1427,6 +1460,53 @@ def main(
         except Exception as exc:
             sys.stderr.write(f"error: query failed: {exc}\n")
             return 2
+
+    if args.command == "stream":
+        if args.duration <= 0:
+            sys.stderr.write("error: --duration must be a positive integer\n")
+            return 2
+
+        output_dir = Path(args.output_dir)
+        _log_event(
+            "info",
+            "streaming_session_started",
+            duration_seconds=args.duration,
+            output_dir=str(output_dir),
+            reconcile=args.reconcile,
+        )
+
+        import asyncio
+
+        try:
+            summary = asyncio.run(
+                run_streaming_session(
+                    duration_seconds=args.duration,
+                    output_dir=output_dir,
+                    reconcile=args.reconcile,
+                    coinbase_client=client,
+                    connect_factory=connect_factory,
+                )
+            )
+            metrics_obj = summary.get("metrics")
+            trades_captured = (
+                metrics_obj.get("total_trades_captured", 0) if isinstance(metrics_obj, dict) else 0
+            )
+            _log_event(
+                "info",
+                "streaming_session_completed",
+                run_id=summary.get("run_id"),
+                trades_captured=trades_captured,
+            )
+            sys.stdout.write(json.dumps(summary, indent=2) + "\n")
+            return 0
+        except StreamingSessionError as exc:
+            _log_event("error", "streaming_session_failed", error=str(exc), exit_code=exc.exit_code)
+            sys.stderr.write(f"error: {exc}\n")
+            return exc.exit_code
+        except Exception as exc:
+            _log_event("error", "streaming_session_failed", error=str(exc))
+            sys.stderr.write(f"error: streaming session failed: {exc}\n")
+            return 1
 
     sys.stderr.write(f"error: unrecognized command: {args.command}\n")
     return 2
