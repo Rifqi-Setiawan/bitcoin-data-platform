@@ -122,24 +122,22 @@ def validate_record(
     if time_err:
         violations.append(time_err)
 
-    raw_tx = raw_record.get("TxCnt")
-    tx_count, tx_err = _parse_non_negative_int(raw_tx, "TxCnt", prefix)
-    if tx_err:
-        violations.append(tx_err)
+    int_fields: dict[str, int] = {}
+    for metric_name in ("TxCnt", "AdrActCnt"):
+        val, err = _parse_non_negative_int(raw_record.get(metric_name), metric_name, prefix)
+        if err:
+            violations.append(err)
+        elif val is not None:
+            int_fields[metric_name] = val
 
-    raw_adr = raw_record.get("AdrActCnt")
-    adr_count, adr_err = _parse_non_negative_int(raw_adr, "AdrActCnt", prefix)
-    if adr_err:
-        violations.append(adr_err)
-
-    if violations or dt is None or tx_count is None or adr_count is None or not asset_str:
+    if violations or dt is None or len(int_fields) != 2 or not asset_str:
         return None, violations
 
     record = CoinMetricsRecord(
         asset=asset_str,
         time_utc=dt,
-        tx_count=tx_count,
-        active_addresses=adr_count,
+        tx_count=int_fields["TxCnt"],
+        active_addresses=int_fields["AdrActCnt"],
     )
     return record, []
 

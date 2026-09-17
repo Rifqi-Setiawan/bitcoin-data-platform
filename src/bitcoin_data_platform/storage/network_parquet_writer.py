@@ -4,7 +4,7 @@ import os
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC
 from pathlib import Path
 
 import pyarrow as pa
@@ -127,35 +127,24 @@ def write_network_parquet_partitions(
             / f"year={year}"
             / "data.parquet"
         )
-        is_new = not target_file.exists() and not (
-            existing_file is not None and existing_file.exists()
-        )
-
-        source_existing_file = (
+        source_existing = (
             existing_file
-            if (existing_file is not None and existing_file.exists())
+            if existing_file.exists()
             else (target_file if target_file.exists() else None)
         )
-        existing_metrics: list[NormalizedNetworkMetric] = []
-        if source_existing_file is not None:
-            existing_metrics = read_network_partition_metrics(source_existing_file)
+        is_new = source_existing is None
+        existing_metrics = (
+            read_network_partition_metrics(source_existing) if source_existing else []
+        )
 
         # Merge and deduplicate by natural key: (source, asset, metric_date_utc)
-        deduped: dict[tuple[str, str, datetime], NormalizedNetworkMetric] = {}
-        for m in existing_metrics:
-            key = (m.source, m.asset, m.metric_date_utc)
-            deduped[key] = m
-
+        deduped = {(m.source, m.asset, m.metric_date_utc): m for m in existing_metrics}
         for m in new_metrics:
             key = (m.source, m.asset, m.metric_date_utc)
-            if key in deduped:
-                existing_m = deduped[key]
-                if (m.ingested_at_utc, m.source_run_id) >= (
-                    existing_m.ingested_at_utc,
-                    existing_m.source_run_id,
-                ):
-                    deduped[key] = m
-            else:
+            if key not in deduped or (m.ingested_at_utc, m.source_run_id) >= (
+                deduped[key].ingested_at_utc,
+                deduped[key].source_run_id,
+            ):
                 deduped[key] = m
 
         merged_metrics = sorted(deduped.values(), key=lambda m: m.metric_date_utc)

@@ -4,7 +4,7 @@ import os
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC
 from decimal import Decimal
 from pathlib import Path
 
@@ -143,36 +143,26 @@ def write_parquet_partitions(
             / f"year={year}"
             / "data.parquet"
         )
-        is_new = not target_file.exists() and not (
-            existing_file is not None and existing_file.exists()
-        )
-
         # Collect existing candles if partition exists
-        source_existing_file = (
+        source_existing = (
             existing_file
-            if (existing_file is not None and existing_file.exists())
+            if existing_file.exists()
             else (target_file if target_file.exists() else None)
         )
-        existing_candles: list[NormalizedCandle] = []
-        if source_existing_file is not None:
-            existing_candles = read_partition_candles(source_existing_file)
+        is_new = source_existing is None
+        existing_candles = read_partition_candles(source_existing) if source_existing else []
 
         # Merge and deduplicate by natural key: latest ingested_at / source_run_id wins
-        deduped: dict[tuple[str, str, int, datetime], NormalizedCandle] = {}
-        for c in existing_candles:
-            key = (c.source, c.product_id, c.granularity_seconds, c.candle_start_utc)
-            deduped[key] = c
-
+        deduped = {
+            (c.source, c.product_id, c.granularity_seconds, c.candle_start_utc): c
+            for c in existing_candles
+        }
         for c in new_candles:
             key = (c.source, c.product_id, c.granularity_seconds, c.candle_start_utc)
-            if key in deduped:
-                existing_c = deduped[key]
-                if (c.ingested_at_utc, c.source_run_id) >= (
-                    existing_c.ingested_at_utc,
-                    existing_c.source_run_id,
-                ):
-                    deduped[key] = c
-            else:
+            if key not in deduped or (c.ingested_at_utc, c.source_run_id) >= (
+                deduped[key].ingested_at_utc,
+                deduped[key].source_run_id,
+            ):
                 deduped[key] = c
 
         merged_candles = sorted(deduped.values(), key=lambda c: c.candle_start_utc)

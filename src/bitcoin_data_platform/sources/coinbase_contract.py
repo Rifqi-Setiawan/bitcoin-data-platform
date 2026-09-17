@@ -99,41 +99,26 @@ def validate_candle(
             violations.append(f"{prefix}time cannot be converted to UTC datetime: {exc}")
 
     # 2. Validate price fields (idx 1..4): Decimal > 0
-    low_dec, low_err = _parse_decimal(raw_low, "low", prefix)
-    if low_err:
-        violations.append(low_err)
-    elif low_dec is not None and low_dec <= 0:
-        violations.append(f"{prefix}low price must be positive, got {low_dec}")
-
-    high_dec, high_err = _parse_decimal(raw_high, "high", prefix)
-    if high_err:
-        violations.append(high_err)
-    elif high_dec is not None and high_dec <= 0:
-        violations.append(f"{prefix}high price must be positive, got {high_dec}")
-
-    open_dec, open_err = _parse_decimal(raw_open, "open", prefix)
-    if open_err:
-        violations.append(open_err)
-    elif open_dec is not None and open_dec <= 0:
-        violations.append(f"{prefix}open price must be positive, got {open_dec}")
-
-    close_dec, close_err = _parse_decimal(raw_close, "close", prefix)
-    if close_err:
-        violations.append(close_err)
-    elif close_dec is not None and close_dec <= 0:
-        violations.append(f"{prefix}close price must be positive, got {close_dec}")
+    prices: dict[str, Decimal] = {}
+    for field, raw_val in (
+        ("low", raw_low),
+        ("high", raw_high),
+        ("open", raw_open),
+        ("close", raw_close),
+    ):
+        dec, err = _parse_decimal(raw_val, field, prefix)
+        if err:
+            violations.append(err)
+        elif dec is not None and dec <= 0:
+            violations.append(f"{prefix}{field} price must be positive, got {dec}")
+        elif dec is not None:
+            prices[field] = dec
 
     # Cross-field check: high >= low
-    if (
-        low_dec is not None
-        and high_dec is not None
-        and low_dec > 0
-        and high_dec > 0
-        and high_dec < low_dec
-    ):
+    if "low" in prices and "high" in prices and prices["high"] < prices["low"]:
         violations.append(
-            f"{prefix}high price ({high_dec}) must be "
-            f"greater than or equal to low price ({low_dec})"
+            f"{prefix}high price ({prices['high']}) must be "
+            f"greater than or equal to low price ({prices['low']})"
         )
 
     # 3. Validate volume (idx 5): Decimal >= 0
@@ -143,24 +128,16 @@ def validate_candle(
     elif vol_dec is not None and vol_dec < 0:
         violations.append(f"{prefix}volume must be non-negative, got {vol_dec}")
 
-    has_none = (
-        candle_time is None
-        or low_dec is None
-        or high_dec is None
-        or open_dec is None
-        or close_dec is None
-        or vol_dec is None
-    )
-    if violations or has_none:
+    if violations or candle_time is None or vol_dec is None or len(prices) != 4:
         return None, violations
 
     candle = CoinbaseCandle(
-        timestamp_utc=candle_time,  # type: ignore[arg-type]
-        low=low_dec,  # type: ignore[arg-type]
-        high=high_dec,  # type: ignore[arg-type]
-        open=open_dec,  # type: ignore[arg-type]
-        close=close_dec,  # type: ignore[arg-type]
-        volume=vol_dec,  # type: ignore[arg-type]
+        timestamp_utc=candle_time,
+        low=prices["low"],
+        high=prices["high"],
+        open=prices["open"],
+        close=prices["close"],
+        volume=vol_dec,
     )
     return candle, []
 

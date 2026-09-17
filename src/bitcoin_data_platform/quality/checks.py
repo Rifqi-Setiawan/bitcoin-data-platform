@@ -3,23 +3,11 @@
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Protocol, TypeVar, runtime_checkable
+from typing import Any, TypeVar
 
 
 class QualityCheckError(ValueError):
     """Raised when data quality assertions fail."""
-
-
-@runtime_checkable
-class CandleLike(Protocol):
-    """Protocol for candle objects subjected to quality checks."""
-
-    candle_start_utc: datetime
-    open: Decimal
-    high: Decimal
-    low: Decimal
-    close: Decimal
-    volume_base: Decimal
 
 
 T = TypeVar("T")
