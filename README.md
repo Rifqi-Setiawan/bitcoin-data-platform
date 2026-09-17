@@ -428,6 +428,53 @@ bitcoin-data query \
   --output ./data/exports/sample.arrow
 ```
 
+## Phase 9: Real-Time WebSocket Trade Streaming Experiment & Reconciliation
+
+Phase 9 implements an isolated, bounded real-time trade capture collector and latency benchmarking experiment using the Coinbase Exchange WebSocket feed (`wss://ws-feed.exchange.coinbase.com`):
+
+- **Strict Experimental Isolation (`streaming/`)**:
+  - Operates completely outside the production batch pipeline; never writes to curated Parquet partitions (`curated/market/`, `curated/onchain/`) or alters batch watermarks.
+  - Production batch remains the single source of truth for historical candles and OLAP models.
+- **Async WebSocket Connection Supervisor (`streaming/connection.py`)**:
+  - Connects to public WebSocket feed with automatic channel subscription (`matches`, `heartbeat`).
+  - Exponential backoff reconnection with full jitter (`min(30s, base * 2^attempt)`).
+- **Bounded In-Memory Buffer (`streaming/buffer.py`)**:
+  - Strictly limited to 20,000 events or 32 MiB to prevent memory pressure on single-host VPS.
+  - Applies `drop-newest` overflow policy with explicit loss accounting counters.
+- **Atomic Micro-Batch Persistence (`streaming/writer.py`)**:
+  - Persists raw trade micro-batches to immutable JSON Lines segments (`part-<batch_id>.jsonl`) using atomic rename (`.partial` -> `.jsonl`) and `os.fsync()`.
+  - Generates atomic commit receipts (`commits/<batch_id>.json`) with SHA-256 checksums and sequence bounds.
+  - Enforces minimum free disk headroom guard threshold (default: 50 MiB).
+- **Synthetic Candle Replay Engine (`streaming/candles.py`)**:
+  - Deterministic replay of committed trade segments to generate synthetic 1-minute and 1-hour OHLCV candles exported to Parquet (`derived/candles_1m.parquet`, `derived/candles_1h.parquet`).
+  - Automatic deduplication on `trade_id` and tie-breaker sorting on timestamp and sequence.
+- **Post-Capture REST Reconciliation (`streaming/reconcile.py`)**:
+  - Evaluates synthetic streaming candles against official Coinbase REST API candles for settled windows.
+  - Computes $\Delta\text{Open}, \Delta\text{High}, \Delta\text{Low}, \Delta\text{Close}$, and $\Delta\text{Volume}$ and classifies windows as `matched`, `mismatched`, or `partial_capture`.
+
+### Stream CLI Command
+
+Run a bounded trade streaming capture session:
+
+```bash
+# Capture 60 seconds of live trades with post-capture REST reconciliation
+bitcoin-data stream \
+  --duration 60 \
+  --output-dir ./data/raw/streaming \
+  --reconcile
+```
+
+Each run generates an isolated artifact directory under `<output-dir>/runs/<run_id>/`:
+```text
+<output-dir>/runs/<run_id>/
+├── manifest.json               # Run parameters, start/end timestamps, exit code
+├── events/part-<batch_id>.jsonl # Immutable raw trade segments
+├── commits/<batch_id>.json     # Commit receipts with checksums and row counts
+├── derived/candles_1m.parquet  # Synthetic 1-minute candles
+├── derived/candles_1h.parquet  # Synthetic 1-hour candles
+└── reports/summary.json        # Latency percentiles (p50/p95/p99), loss metrics, reconciliation deltas
+```
+
 ## Quality gates
 
 Run the documented quality gates:
@@ -463,9 +510,11 @@ make clean-dist # remove build and packaging artifacts
 - [Phase 6 Specification](docs/specs/PHASE_6_REPRODUCIBLE_DELIVERY_CICD.md)
 - [Phase 7 Specification](docs/specs/PHASE_7_SECOND_DOMAIN_CONFORMED_MODELING.md)
 - [Phase 8 Specification](docs/specs/PHASE_8_RESEARCH_SERVING_LAYER.md)
+- [Phase 9 Specification](docs/specs/PHASE_9_WEBSOCKET_STREAMING.md)
 - [Official Data Dictionary](docs/data_dictionary/DATA_DICTIONARY.md)
 - [ADR D-008: Container Evaluation](docs/decisions/D-008_CONTAINER_EVALUATION.md)
 - [ADR D-009: dbt-core Evaluation](docs/decisions/D-009_DBT_EVALUATION.md)
+- [ADR D-010: Streaming Experiment](docs/decisions/D-010_STREAMING_EXPERIMENT.md)
 - [Operational Runbook (Phase 3)](docs/runbooks/OPERATIONAL_RUNBOOK.md)
 - [Deployment Runbook (Phase 4)](docs/runbooks/DEPLOYMENT_RUNBOOK.md)
 - [Data Quality Runbook (Phase 5)](docs/runbooks/DATA_QUALITY_RUNBOOK.md)
