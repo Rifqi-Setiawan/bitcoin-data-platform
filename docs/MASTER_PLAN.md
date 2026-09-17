@@ -15,9 +15,8 @@ The planned public repository is `bitcoin-data-platform`. The recommended VPS lo
 
 - Code: `/srv/apps/services/bitcoin-data-platform`
 - Persistent data and run state: `/srv/data/bitcoin-data-platform`
-- Local planning seed: `C:\Users\Rifqi\Documents\ChatGPT\VPS\bitcoin-data-platform`
 
-The local seed is not yet a Git repository and nothing has been deployed. Repository initialization and the first source contract are the next implementation phase.
+Deployment and runtime operations adhere to these established boundaries.
 
 ## 2. Current VPS Audit
 
@@ -39,13 +38,9 @@ No infrastructure was changed during this audit.
 | Ephemeral storage | About 110 GiB at `/mnt`; Azure resource disk, unsuitable for persistent data or backups |
 | Runtime | Python 3.12.3, Git 2.43.0, Docker Engine 29.8.1, Docker Compose v5.5.1 |
 | Public network | SSH on TCP 22; UFW default-deny inbound/routed, only SSH allowed |
-| Private listeners | 9Router on `127.0.0.1:20128` |
-| Containers | Official 9Router image, recorded healthy and loopback-bound |
-| Services | Docker, containerd, 9Router, `hermes-gateway-345107e9.service` |
-| Hermes | Agent 0.21.3 under a dedicated unprivileged account; model/provider configuration pending |
-| Persistent layout | `/srv/infrastructure`, `/srv/apps/9router`, `/srv/apps/hermes`, and empty/future app groupings under `/srv/apps` |
-| Existing repositories | Infrastructure source of truth at `/srv/infrastructure`; no Bitcoin platform repository recorded |
-| Security posture | Hermes has no sudo or Docker socket access; secrets and runtime state are excluded from Git; password SSH remains enabled pending proven key access |
+| Persistent layout | `/srv/infrastructure`, `/srv/apps`, and dedicated service directories under `/srv/data` |
+| Existing repositories | Infrastructure source of truth at `/srv/infrastructure` |
+| Security posture | Production services run under dedicated unprivileged system users; secrets and runtime state are excluded from Git; password SSH remains enabled pending proven key access |
 
 ### Mandatory pre-deployment revalidation
 
@@ -65,7 +60,7 @@ Bound outputs and redact secret values. Do not inspect `.env` contents merely to
 ### Compute and memory
 
 - Four vCPUs are enough for Python, DuckDB, Parquet, tests, and modest local analytics.
-- Memory is generous relative to V1 data volume, but DuckDB should still have an explicit memory limit so a malformed query cannot contend with 9Router or Hermes.
+- Memory is generous relative to V1 data volume, but DuckDB should still have an explicit memory limit so a malformed query cannot contend with other host workloads.
 - No swap means an out-of-memory event has less graceful fallback. Keep transformations bounded and monitor RSS.
 
 ### Storage
@@ -79,7 +74,7 @@ Bound outputs and redact secret values. Do not inspect `.env` contents merely to
 
 - This is a single-host system. Maintenance or host failure pauses ingestion.
 - The owner is learning the system, so every automated path needs a manual equivalent and a recovery runbook.
-- Existing 9Router and Hermes workloads share CPU, memory, root storage, journald, and operational attention.
+- Host workloads share CPU, memory, root storage, journald, and operational attention.
 - Live SSH must be restored or explicitly provided before deployment verification can be trusted.
 
 ### Network and security
@@ -271,7 +266,6 @@ bitcoin-data-platform/
 │   ├── MASTER_PLAN.md
 │   ├── architecture/ARCHITECTURE_V1.md
 │   ├── decisions/README.md
-│   ├── learning/DE_CONCEPT_MAP.md
 │   ├── roadmap/ROADMAP.md
 │   ├── runbooks/
 │   └── sources/
@@ -369,7 +363,7 @@ Summary:
 8. Research serving and portfolio demonstration.
 9. Event-driven experiment only after a batch baseline.
 10. Lakehouse/distributed evolution only when measured limits require it.
-11. AI-assisted operations and research, with human-reviewed outputs.
+11. Automated operational diagnostics and research reporting.
 
 ## 15. Milestones and Definition of Done
 
@@ -385,43 +379,39 @@ Summary:
 | M7 — Multi-domain | One justified second source uses a documented contract and conformed UTC/date semantics; cross-domain model and lineage are testable |
 | M8 — Research product | Reproducible notebook or dashboard answers documented questions without embedding transformation logic |
 | M9 — Streaming experiment | A narrowly scoped experiment measures latency, loss, replay, and operating cost; keep/remove decision documented |
-| M10 — AI assistance | Agent operates read-only by default, cites data/run lineage, cannot trade or mutate production without explicit approval, and is evaluated on test incidents |
+| M10 — Operational intelligence | Automated triage operates read-only by default, cites data/run lineage, and is evaluated on synthetic test incidents |
 
-## 16. Data Engineering Concept Map
-
-See [DE_CONCEPT_MAP.md](learning/DE_CONCEPT_MAP.md). Concepts are introduced when a real project problem appears rather than as a checklist.
-
-## 17. AI / Hermes Integration Roadmap
+## 16. Automated Operational Diagnostics Roadmap
 
 ### Useful later
 
 - Explain a failed run by combining run metadata, bounded logs, and data-quality results.
 - Draft a freshness or anomaly incident summary with links to exact run IDs and partitions.
 - Translate natural-language research questions into read-only SQL, enforce query limits, and show generated SQL.
-- Discover datasets and draft contracts for human review.
+- Discover datasets and draft contracts for review.
 - Summarize monthly Bitcoin observations from reproducible SQL outputs and cite data timestamps/sources.
 - Propose remediation steps, but require approval before reruns, backfills, deletes, deployment, or service control.
 
-### Gimmicks to avoid
+### Anti-patterns to avoid
 
-- An agent that simply wraps a deterministic API call.
-- LLM-based anomaly detection before statistical baselines and explicit rules exist.
-- Letting an agent edit curated data directly.
+- Wrapping a deterministic API call with unnecessary heuristic layers.
+- Heuristic anomaly detection before statistical baselines and explicit rules exist.
+- Direct automated edits to curated analytical data without audit.
 - Autonomous trading, buy/sell decisions, or portfolio actions.
-- A vector database without a defined corpus, retrieval evaluation, and maintenance owner.
-- Giving Hermes sudo, Docker socket, database write access, or secrets merely for convenience.
+- Unstructured storage without a defined schema, retrieval evaluation, and maintenance owner.
+- Granting automated services privileged access or database write permissions merely for convenience.
 
 ### Safe integration sequence
 
-1. Read-only documentation and metadata assistant.
+1. Read-only documentation and metadata explorer.
 2. Read-only SQL with row/time limits and audit logs.
 3. Incident triage against synthetic failures.
-4. Human-approved operational suggestions.
+4. Operator-approved operational suggestions.
 5. Narrow, reversible execution capabilities only after authorization and evaluation.
 
-9Router remains model/provider infrastructure, not a data-pipeline dependency. The batch platform must continue to run when AI services are unavailable.
+External analytics and diagnostic tooling remain non-critical extensions, not a data-pipeline dependency. The batch platform must continue to run independently when external auxiliary services are unavailable.
 
-## 18. Future Scaling Path
+## 17. Future Scaling Path
 
 Scale only against measured thresholds:
 
@@ -434,7 +424,7 @@ Scale only against measured thresholds:
 - **Multi-writer data lake:** consider Iceberg/Delta only after object storage, catalog, compaction, and recovery operations are understood.
 - **Distributed compute:** Spark is justified by measured single-node limits, not by a roadmap date.
 
-## 19. Risks and Technical Debt
+## 18. Risks and Technical Debt
 
 | Risk | Mitigation / accepted debt |
 |---|---|
@@ -449,7 +439,7 @@ Scale only against measured thresholds:
 | Public portfolio leaks machine details | Keep public docs generic where needed; never commit IPs, usernames, secret paths, tokens, or runtime dumps |
 | Over-engineering | Every new component needs a problem statement, simpler alternative, trigger, operating cost, and rollback |
 
-## 20. Recommended Next Implementation Step
+## 19. Recommended Next Implementation Step
 
 ## NEXT ACTION
 

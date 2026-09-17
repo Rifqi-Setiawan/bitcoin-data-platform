@@ -1,11 +1,11 @@
 # Phase 1A Implementation Specification — Repository Bootstrap and Window Planner
 
-Status: approved for Hermes implementation
+Status: Approved
 Parent phase: Phase 1 — Repository bootstrap and deterministic raw ingestion
 Task ID: `P1A-window-planner`
-Recommended branch: `hermes/P1A-window-planner`
-Implementation profile: `btc-coder`
-Verification profile: `btc-verifier`
+Recommended branch: `feature/P1A-window-planner`
+Owner: Engineering Team
+Verification: Automated Test Suite & Peer Review
 
 ## 1. Objective
 
@@ -168,7 +168,7 @@ All tests are offline and deterministic.
 
 ## 7. Acceptance criteria
 
-The card is ready for Codex review only when all criteria below are satisfied.
+The card is ready for code review only when all criteria below are satisfied.
 
 ### AC-1 — Clean bootstrap
 
@@ -204,8 +204,7 @@ and creates or modifies no runtime data file.
 ### AC-7 — Quality gate
 
 The repository-documented formatter check, linter, type checker, and complete offline test suite all
-exit `0`. Hermes must report the exact commands and summarized results; it must not claim a tool ran
-if the tool is not configured.
+exit `0`. Quality checks and test runs must be reported with exact commands and summarized results.
 
 ### AC-8 — Documentation and repository hygiene
 
@@ -215,13 +214,13 @@ credential, generated data, virtual environment, cache, or runtime output is com
 
 ### AC-9 — Scoped commit
 
-Implementation is committed on `hermes/P1A-window-planner` with a coherent commit. The handoff names
+Implementation is committed on `feature/P1A-window-planner` with a coherent commit. The handoff names
 the task and branch, lists changed files, includes validation evidence, identifies assumptions and
 deferred Phase 1 work, and supplies the commit hash.
 
 ## 8. Required validation evidence
 
-Hermes must run and report the repository's actual commands established by the implementation. At
+Validation requires running and reporting the repository's actual commands established by the implementation. At
 minimum, evidence must cover equivalents of:
 
 ```bash
@@ -240,13 +239,13 @@ example. Do not use a live network call as evidence.
 ## 9. Dependencies and sequencing
 
 - Depends on the approved Phase 0 architecture documents already in the repository.
-- Has no dependency on 9Router availability at runtime and requires no API key.
-- Must complete and pass Codex review before a separate Phase 1B card adds the Coinbase HTTP client,
+- Requires no external runtime dependencies or API keys.
+- Must complete and pass code review before a separate Phase 1B card adds the Coinbase HTTP client,
   retries, rate limiting, source tuple validation, or raw-envelope persistence.
 
 ## 10. Handoff checklist
 
-Hermes must return:
+Handoff must provide:
 
 - task ID and branch;
 - concise implementation summary;

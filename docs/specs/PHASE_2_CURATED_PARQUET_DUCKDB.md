@@ -1,11 +1,11 @@
 # Phase 2 Implementation Specification — Curated Parquet and DuckDB Modeling
 
-Status: approved for implementation
+Status: Approved
 Parent phase: Phase 2 — Curated Parquet and analytical modeling
 Task ID: `P2-curated-parquet-duckdb`
-Recommended branch: `hermes/P2-curated-parquet-duckdb`
-Implementation profile: `btc-coder`
-Verification profile: `btc-verifier`
+Recommended branch: `feature/P2-curated-parquet-duckdb`
+Owner: Engineering Team
+Verification: Automated Test Suite & Peer Review
 
 ## 1. Objective
 

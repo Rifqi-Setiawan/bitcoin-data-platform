@@ -1,11 +1,11 @@
 # Phase 4 Implementation Specification — Single-Host Orchestration (systemd Timer & Service)
 
-Status: approved for implementation
+Status: Approved
 Parent phase: Phase 4 — Single-host orchestration and scheduled pipeline
 Task ID: `P4-systemd-orchestration`
-Recommended branch: `hermes/P4-single-host-orchestration`
-Implementation profile: `btc-coder`
-Verification profile: `btc-verifier`
+Recommended branch: `feature/P4-single-host-orchestration`
+Owner: Engineering Team
+Verification: Automated Test Suite & Peer Review
 
 ## 1. Objective
 
@@ -107,7 +107,7 @@ WantedBy=timers.target
 ```
 
 ### 4.3 Directory Layout & Permissions (VPS Production Target)
-- Application code (owned by deployer/hermes, read-only for service):
+- Application code (owned by deployer, read-only for service):
   `/srv/apps/services/bitcoin-data-platform/`
 - Runtime data & state (owned by `bitcoin-data:bitcoin-data`, mode `0750`):
   `/srv/data/bitcoin-data-platform/`

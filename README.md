@@ -322,10 +322,8 @@ make test       # pytest test suite
 - [Phase 4 Specification](docs/specs/PHASE_4_SINGLE_HOST_ORCHESTRATION.md)
 - [Operational Runbook (Phase 3)](docs/runbooks/OPERATIONAL_RUNBOOK.md)
 - [Deployment Runbook (Phase 4)](docs/runbooks/DEPLOYMENT_RUNBOOK.md)
-- [Data Engineering concept map](docs/learning/DE_CONCEPT_MAP.md)
 - [Source evaluation](docs/sources/SOURCE_EVALUATION.md)
-- [Hermes implementation workflow](docs/IMPLEMENTATION_WORKFLOW.md)
 
 ## Safety boundary
 
-This project is for data engineering and Bitcoin research. It does not place trades, provide automated buy/sell decisions, expose a database publicly, or depend on an AI agent for pipeline correctness.
+This project is for data engineering and Bitcoin research. It does not place trades, provide automated buy/sell decisions, expose a database publicly, or depend on external heuristic services for pipeline correctness.

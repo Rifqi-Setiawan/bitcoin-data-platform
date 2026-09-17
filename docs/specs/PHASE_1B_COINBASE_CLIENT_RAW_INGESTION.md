@@ -1,11 +1,11 @@
 # Phase 1B Implementation Specification — Coinbase HTTP Client and Raw Ingestion
 
-Status: approved for implementation
+Status: Approved
 Parent phase: Phase 1 — Repository bootstrap and deterministic raw ingestion
 Task ID: `P1B-coinbase-raw-ingestion`
-Recommended branch: `hermes/P1B-coinbase-raw-ingestion`
-Implementation profile: `btc-coder`
-Verification profile: `btc-verifier`
+Recommended branch: `feature/P1B-coinbase-raw-ingestion`
+Owner: Engineering Team
+Verification: Automated Test Suite & Peer Review
 
 ## 1. Objective
 

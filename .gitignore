@@ -30,6 +30,5 @@ logs/
 *.parquet
 *.json.gz
 
-# Hermes/Git parallel workspaces
+# Development worktrees
 .worktrees/
-.hermes/

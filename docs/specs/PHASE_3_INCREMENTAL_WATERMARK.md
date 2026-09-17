@@ -1,11 +1,11 @@
 # Phase 3 Implementation Specification — Incremental Loading and Recovery
 
-Status: approved for implementation
+Status: Approved
 Parent phase: Phase 3 — Incremental loads and recovery
 Task ID: `P3-incremental-watermark`
-Recommended branch: `hermes/P3-incremental-watermark`
-Implementation profile: `btc-coder`
-Verification profile: `btc-verifier`
+Recommended branch: `feature/P3-incremental-watermark`
+Owner: Engineering Team
+Verification: Automated Test Suite & Peer Review
 
 ## 1. Objective
 

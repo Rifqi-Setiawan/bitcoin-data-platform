@@ -135,17 +135,17 @@ Each phase solves the next observed problem. A phase is complete only when its o
 - **Definition of done:** New stack beats the simpler design on defined SLO/cost criteria and can be operated/restored.
 - **Interview outcome:** Explain data lake vs warehouse vs lakehouse and why a table format is more than Parquet files.
 
-## Phase 11 — AI-assisted data operations
+## Phase 11 — Automated operational diagnostics
 
-- **Objective:** Add auditable assistance where it reduces investigation/research effort without controlling money or silently changing data.
+- **Objective:** Add auditable operational diagnostics and automated triage where it reduces investigation effort without controlling pipelines or silently changing data.
 - **Prerequisites:** Trustworthy metadata, run history, data dictionary, read-only query boundary, evaluation cases.
-- **Components:** Hermes read-only tool access, 9Router provider routing, query limits, audit log, incident/research prompt templates, human approval boundary.
-- **Concepts:** Tool authorization, grounding, provenance, evaluation, least privilege, human-in-the-loop operations.
-- **Expected output:** Agent answers health/research questions with SQL, run IDs, data timestamps, and uncertainty.
-- **Tests:** Prompt-injection fixtures, forbidden write attempts, hallucinated metric names, expensive query limits, outage of 9Router, incident benchmark.
-- **Portfolio value:** Practical AI/DataOps integration instead of a chatbot veneer.
-- **Definition of done:** Core pipeline is unaffected by AI outage; outputs are traceable; writes/service control require explicit authorization; no trading path exists.
-- **Interview outcome:** Explain where LLMs help, where deterministic rules are safer, and how permissions/evals reduce risk.
+- **Components:** Diagnostic CLI, read-only query limits, execution audit logs, incident report templates, operator approval boundary.
+- **Concepts:** Operational observability, telemetry grounding, provenance, least privilege, human-in-the-loop operations.
+- **Expected output:** Diagnostic tooling answers platform health questions with SQL, run IDs, data timestamps, and structured anomaly reports.
+- **Tests:** Malformed query attempts, forbidden write attempts, expensive query limits, service degradation resilience, incident benchmarks.
+- **Portfolio value:** Practical DataOps integration and automated telemetry analysis.
+- **Definition of done:** Core pipeline is unaffected by diagnostic service outage; outputs are traceable; service controls require explicit operator authorization; no automated write path exists.
+- **Interview outcome:** Explain where automated diagnostics help, where deterministic validation is safer, and how permission boundaries reduce operational risk.
 
 ## Stage gates
 
