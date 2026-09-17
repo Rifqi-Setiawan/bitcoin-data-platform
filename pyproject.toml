@@ -13,7 +13,9 @@ authors = [
     { name = "Bitcoin Data Platform Contributors" }
 ]
 dependencies = [
+    "duckdb>=1.1.0",
     "httpx>=0.28.0",
+    "pyarrow>=18.0.0",
 ]
 
 [project.scripts]
@@ -67,3 +69,7 @@ warn_return_any = true
 warn_unused_configs = true
 mypy_path = "src"
 packages = ["bitcoin_data_platform"]
+
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
