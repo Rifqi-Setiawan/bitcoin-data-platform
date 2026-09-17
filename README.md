@@ -283,6 +283,26 @@ bitcoin-data repair \
 - `5`: Storage failure (disk, Parquet, or database write failure).
 - `6`: Concurrent run detected (run lock actively held).
 
+## Phase 5: Observability, Data Quality Rules & Failure Alerting
+
+Phase 5 establishes multi-layer operational observability, automated dataset quality gates, storage monitoring, and low-noise failure alerting:
+
+- **Dataset Quality Rules (`quality/dataset_checks.py`)**:
+  - **Natural Key Uniqueness (`BLOCK`)**: Prevents duplicate records across `(source, product_id, granularity_seconds, candle_start_utc)`.
+  - **Boundary Reconciliation (`BLOCK`)**: Reconciles candle timestamps against planned time intervals, catching out-of-bounds outliers.
+  - **Price Return Anomaly (`WARN`)**: Detects anomalous hourly price moves exceeding 15% (both intrabar and interbar).
+  - **Volume Spike Anomaly (`WARN`)**: Identifies volume spikes exceeding 5x rolling/batch baseline.
+- **DuckDB Quality Audit Table (`quality_check_results`)**: Persists check outcomes, metric values, evaluated thresholds, and severity classifications.
+- **Platform Health Check (`bitcoin-data status --check`)**:
+  - Evaluates four health pillars: watermark freshness $\le 2.0$ hours, zero data gaps, disk headroom ($< 80\%$), and zero active error locks.
+  - Returns exit code `0` when healthy and exit code `1` when degraded.
+  - Terminal-friendly formatted text mode via `--format text`.
+- **Low-Noise Failure Alerting**:
+  - Automatically triggered via systemd `OnFailure=bitcoin-data-failure@%n.service`.
+  - Sub-command `bitcoin-data alert --failed-unit %I` scrubs sensitive credentials/paths and throttles repeated alerts within a 2-hour window to prevent alert fatigue.
+
+For incident remediation playbooks and data quality triage, see the **[Data Quality Runbook](docs/runbooks/DATA_QUALITY_RUNBOOK.md)**.
+
 ## Production Deployment & Scheduling (systemd)
 
 Phase 4 operationalizes the pipeline on a single-host Linux VPS using native `systemd` service and timer units:
@@ -320,8 +340,10 @@ make test       # pytest test suite
 - [Phase 2 Specification](docs/specs/PHASE_2_CURATED_PARQUET_DUCKDB.md)
 - [Phase 3 Specification](docs/specs/PHASE_3_INCREMENTAL_WATERMARK.md)
 - [Phase 4 Specification](docs/specs/PHASE_4_SINGLE_HOST_ORCHESTRATION.md)
+- [Phase 5 Specification](docs/specs/PHASE_5_OBSERVABILITY_DATA_QUALITY.md)
 - [Operational Runbook (Phase 3)](docs/runbooks/OPERATIONAL_RUNBOOK.md)
 - [Deployment Runbook (Phase 4)](docs/runbooks/DEPLOYMENT_RUNBOOK.md)
+- [Data Quality Runbook (Phase 5)](docs/runbooks/DATA_QUALITY_RUNBOOK.md)
 - [Source evaluation](docs/sources/SOURCE_EVALUATION.md)
 
 ## Safety boundary

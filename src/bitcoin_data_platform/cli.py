@@ -11,6 +11,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from bitcoin_data_platform.infra import dispatch_failure_alert
+from bitcoin_data_platform.quality import run_dataset_quality_checks
 from bitcoin_data_platform.quality.checks import QualityCheckError
 from bitcoin_data_platform.sources.coinbase_client import (
     CoinbaseClient,
@@ -57,6 +59,86 @@ def _resolve_clock(clock: Callable[[], datetime] | None) -> datetime:
     if override:
         return parse_iso_utc(override, "BITCOIN_DATA_OVERRIDE_NOW_UTC")
     return datetime.now(UTC)
+
+
+def _format_status_text(data: dict[str, Any]) -> str:
+    """Format status dictionary as human-readable terminal table summary."""
+    is_healthy = data.get("is_healthy", False)
+    health_str = "HEALTHY" if is_healthy else "DEGRADED"
+    is_locked = data.get("is_locked", False)
+    lock_str = "LOCKED" if is_locked else "UNLOCKED"
+
+    wm = data.get("watermark_utc") or "None"
+    wm_age = data.get("watermark_age_hours")
+    wm_age_str = f"{wm_age:.2f} hours" if wm_age is not None else "N/A"
+
+    c_stats = data.get("curated_stats") or {}
+    total_rows = c_stats.get("total_rows", 0)
+    partitions = c_stats.get("partitions", 0)
+    total_bytes = c_stats.get("total_size_bytes", 0)
+    size_kb = round(total_bytes / 1024.0, 2)
+    min_c = c_stats.get("min_candle_utc") or "N/A"
+    max_c = c_stats.get("max_candle_utc") or "N/A"
+
+    gaps = data.get("gaps") or []
+    gap_count = len(gaps)
+
+    disk = data.get("disk") or {}
+    total_gb = disk.get("total_gb", 0.0)
+    used_gb = disk.get("used_gb", 0.0)
+    free_gb = disk.get("free_gb", 0.0)
+    pct_used = disk.get("percent_used", 0.0)
+    if disk.get("disk_critical"):
+        disk_status = "CRITICAL (>80%)"
+    elif disk.get("disk_warning"):
+        disk_status = "WARNING (>70%)"
+    else:
+        disk_status = "OK"
+
+    last_run = data.get("last_run") or {}
+    last_run_str = (
+        f"{last_run.get('run_id', 'N/A')} ({last_run.get('mode', 'N/A')}) - "
+        f"{last_run.get('status', 'N/A')}"
+        if last_run
+        else "None"
+    )
+
+    recent_qc = data.get("quality_checks") or []
+    qc_count = len(recent_qc)
+    qc_failed = sum(1 for q in recent_qc if q.get("status") == "FAILED")
+    qc_passed = sum(1 for q in recent_qc if q.get("status") == "PASSED")
+
+    lines = [
+        "=" * 60,
+        "Bitcoin Data Platform - System Status & Health",
+        "=" * 60,
+        f"Health Status      : {health_str}",
+        f"Lock Status        : {lock_str}",
+        "-" * 60,
+        "[ Watermark & Freshness ]",
+        f"  Watermark UTC    : {wm}",
+        f"  Watermark Age    : {wm_age_str}",
+        "-" * 60,
+        "[ Curated Dataset Stats ]",
+        f"  Total Rows       : {total_rows}",
+        f"  Partitions       : {partitions}",
+        f"  Total Size       : {size_kb} KB",
+        f"  Min Candle UTC   : {min_c}",
+        f"  Max Candle UTC   : {max_c}",
+        f"  Gaps Detected    : {gap_count}",
+        "-" * 60,
+        "[ Storage & Disk Utilization ]",
+        f"  Total Space      : {total_gb:.2f} GB",
+        f"  Used Space       : {used_gb:.2f} GB ({pct_used:.1f}%)",
+        f"  Free Space       : {free_gb:.2f} GB",
+        f"  Disk Status      : {disk_status}",
+        "-" * 60,
+        "[ Execution & Quality Summary ]",
+        f"  Last Run         : {last_run_str}",
+        f"  Quality Checks   : {qc_count} logged ({qc_passed} passed, {qc_failed} failed)",
+        "=" * 60,
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -204,6 +286,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="./data/curated",
         help="Directory for curated Parquet partitions (default: ./data/curated).",
     )
+    status_parser.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format: json (default) or text.",
+    )
+    status_parser.add_argument(
+        "--check",
+        action="store_true",
+        default=False,
+        help="Health check mode: exit 0 if healthy, exit 1 if degraded.",
+    )
 
     # 7. repair command
     repair_parser = subparsers.add_parser(
@@ -234,6 +328,31 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Force clear stale run lock older than 1 hour before repair execution.",
+    )
+
+    # 8. alert command
+    alert_parser = subparsers.add_parser(
+        "alert",
+        help="Dispatch scrubbed, deduplicated failure alert for a systemd unit.",
+        description="Dispatch scrubbed, deduplicated failure alert for a systemd unit.",
+    )
+    alert_parser.add_argument(
+        "--failed-unit",
+        required=True,
+        help="Name of the failed systemd unit (e.g. bitcoin-data.service).",
+    )
+    alert_parser.add_argument(
+        "--state-file",
+        default=None,
+        help=(
+            "Path to alert deduplication state file "
+            "(default: /srv/data/bitcoin-data-platform/state/alert_state.json)."
+        ),
+    )
+    alert_parser.add_argument(
+        "--message",
+        default=None,
+        help="Optional failure message text to scrub and alert.",
     )
 
     return parser
@@ -531,6 +650,43 @@ def main(
             sys.stderr.write(f"error: normalization failure: {exc}\n")
             return 4
 
+        # Step 3b: Run dataset quality checks
+        req_start = min((e.start_utc for e in envelopes), default=None)
+        req_end = max((e.end_utc for e in envelopes), default=None)
+        quality_records = run_dataset_quality_checks(
+            candles,
+            run_id=run_id,
+            requested_start=req_start,
+            requested_end=req_end,
+            evaluated_at_utc=now_utc,
+        )
+        try:
+            db_manager.record_quality_checks(quality_records)
+        except Exception as exc:
+            _log_event("warn", "quality_checks_persist_failed", error=str(exc))
+
+        blocking_failures = [
+            r for r in quality_records if r.severity == "BLOCK" and r.status == "FAILED"
+        ]
+        if blocking_failures:
+            failure_details = "; ".join(f"{r.rule_name}: {r.details}" for r in blocking_failures)
+            db_manager.release_lock(
+                run_id=run_id,
+                status="FAILED",
+                completed_at_utc=_resolve_clock(clock),
+                error_message=f"Dataset quality check violation: {failure_details}",
+            )
+            _log_event("error", "quality_check_blocked", run_id=run_id, details=failure_details)
+            sys.stderr.write(f"error: quality check violation: {failure_details}\n")
+            return 4
+
+        warn_failures = [
+            r for r in quality_records if r.severity == "WARN" and r.status == "FAILED"
+        ]
+        if warn_failures:
+            warn_details = "; ".join(f"{r.rule_name}: {r.details}" for r in warn_failures)
+            _log_event("warn", "quality_check_warning", run_id=run_id, details=warn_details)
+
         # Step 4: Write/merge Parquet partitions
         try:
             partitions = write_parquet_partitions(candles, curated_dir=curated_dir)
@@ -786,6 +942,45 @@ def main(
             sys.stderr.write(f"error: normalization failure: {exc}\n")
             return 4
 
+        # Step 8b: Run dataset quality checks
+        req_start = min((e.start_utc for e in envelopes), default=None)
+        req_end = max((e.end_utc for e in envelopes), default=None)
+        quality_records = run_dataset_quality_checks(
+            candles,
+            run_id=run_id,
+            requested_start=req_start,
+            requested_end=req_end,
+            evaluated_at_utc=now_utc,
+        )
+        try:
+            db_manager.record_quality_checks(quality_records)
+        except Exception as exc:
+            _log_event("warn", "quality_checks_persist_failed", error=str(exc))
+
+        blocking_failures = [
+            r for r in quality_records if r.severity == "BLOCK" and r.status == "FAILED"
+        ]
+        if blocking_failures:
+            failure_details = "; ".join(f"{r.rule_name}: {r.details}" for r in blocking_failures)
+            db_manager.release_lock(
+                run_id=run_id,
+                status="FAILED",
+                completed_at_utc=_resolve_clock(clock),
+                old_watermark_utc=watermark,
+                new_watermark_utc=watermark,
+                error_message=f"Quality check violation: {failure_details}",
+            )
+            _log_event("error", "quality_check_blocked", run_id=run_id, details=failure_details)
+            sys.stderr.write(f"error: quality check violation: {failure_details}\n")
+            return 4
+
+        warn_failures = [
+            r for r in quality_records if r.severity == "WARN" and r.status == "FAILED"
+        ]
+        if warn_failures:
+            warn_details = "; ".join(f"{r.rule_name}: {r.details}" for r in warn_failures)
+            _log_event("warn", "quality_check_warning", run_id=run_id, details=warn_details)
+
         # Step 9: Write/merge Parquet partitions
         try:
             partitions = write_parquet_partitions(candles, curated_dir=curated_dir)
@@ -844,7 +1039,26 @@ def main(
         db_manager = DuckDBManager(db_path=db_path, curated_dir=curated_dir)
         now_utc = _resolve_clock(clock)
         status_data = db_manager.get_status(now_utc=now_utc)
-        sys.stdout.write(json.dumps(status_data, indent=2) + "\n")
+
+        output_format = getattr(args, "format", "json")
+        if output_format == "text":
+            sys.stdout.write(_format_status_text(status_data))
+        else:
+            sys.stdout.write(json.dumps(status_data, indent=2) + "\n")
+
+        if getattr(args, "check", False):
+            return 0 if status_data.get("is_healthy", False) else 1
+        return 0
+
+    if args.command == "alert":
+        now_utc = _resolve_clock(clock)
+        dispatch_failure_alert(
+            failed_unit=args.failed_unit,
+            state_file=args.state_file,
+            message=args.message,
+            now_utc=now_utc,
+            output_stream=sys.stderr,
+        )
         return 0
 
     if args.command == "repair":
