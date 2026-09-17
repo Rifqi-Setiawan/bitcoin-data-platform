@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Lint, Type Check & Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+
+      - name: Lint with ruff
+        run: python -m ruff check .
+
+      - name: Check code formatting with ruff
+        run: python -m ruff format --check .
+
+      - name: Static type checking with mypy
+        run: python -m mypy src
+
+      - name: Run offline test suite
+        run: python -m pytest tests/ -v -m "not integration"
+
+      - name: Build distribution packages
+        run: |
+          pip install build
+          python -m build

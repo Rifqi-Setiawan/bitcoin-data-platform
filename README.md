@@ -314,6 +314,26 @@ Phase 4 operationalizes the pipeline on a single-host Linux VPS using native `sy
 
 For step-by-step user provisioning, permission setup, unit installation, failure recovery, and rollback instructions, see the **[Deployment & Operations Runbook](docs/runbooks/DEPLOYMENT_RUNBOOK.md)**.
 
+## Phase 6: Continuous Integration, Reproducible Packaging & Release
+
+Phase 6 establishes automated CI/CD pipelines, dependency vulnerability scanning, deterministic packaging, and an operational release runbook:
+
+- **Continuous Integration (`.github/workflows/ci.yml`)**:
+  - Automatically triggers on every push and pull request targeting `main`.
+  - Executes linting (`ruff check`), formatting verification (`ruff format --check`), strict static type checking (`mypy src`), offline unit and regression tests (`pytest -m "not integration"`), and package build validation (`python -m build`).
+- **Security & Dependency Audit (`.github/workflows/security.yml`)**:
+  - Scans dependencies against known vulnerability databases (`pip-audit`) on pushes, PRs, and a weekly scheduled cron (`0 4 * * 1`).
+- **Deterministic Packaging & Dependency Locking**:
+  - `requirements.lock`: Fully pinned runtime dependency tree guaranteeing reproducible execution across environments.
+  - `make build`: Produces distribution wheel (`.whl`) and source distribution (`.tar.gz`) via `hatchling`.
+  - `make audit`: Runs local dependency security audit via `pip-audit`.
+  - `make clean-dist`: Cleans build directories and distribution artifacts.
+- **Container Packaging & Parity Evaluation (`Dockerfile`, `.dockerignore`)**:
+  - Multi-stage container build (`python:3.12-slim`) producing an isolated runtime environment with non-root user `bitcoin-data` (UID 1001) and volume boundary `/srv/data/bitcoin-data-platform`.
+  - Architectural comparison documented in **[ADR D-008: Container Evaluation](docs/decisions/D-008_CONTAINER_EVALUATION.md)**.
+- **Release Standard Operating Procedure**:
+  - Documented release tagging (`v0.1.0`), clean-room virtualenv verification, zero-downtime deployment, and rollback procedures in the **[Release & Deployment Runbook](docs/runbooks/RELEASE_RUNBOOK.md)**.
+
 ## Quality gates
 
 Run the documented quality gates:
@@ -327,6 +347,11 @@ make lint       # ruff check and ruff format --check
 make format     # ruff auto-formatting
 make typecheck  # mypy strict static typing
 make test       # pytest test suite
+
+# Packaging and security audits:
+make build      # build distribution packages (wheel and sdist)
+make audit      # audit dependencies for CVE vulnerabilities
+make clean-dist # remove build and packaging artifacts
 ```
 
 ## Current documents
@@ -341,9 +366,12 @@ make test       # pytest test suite
 - [Phase 3 Specification](docs/specs/PHASE_3_INCREMENTAL_WATERMARK.md)
 - [Phase 4 Specification](docs/specs/PHASE_4_SINGLE_HOST_ORCHESTRATION.md)
 - [Phase 5 Specification](docs/specs/PHASE_5_OBSERVABILITY_DATA_QUALITY.md)
+- [Phase 6 Specification](docs/specs/PHASE_6_REPRODUCIBLE_DELIVERY_CICD.md)
+- [ADR D-008: Container Evaluation](docs/decisions/D-008_CONTAINER_EVALUATION.md)
 - [Operational Runbook (Phase 3)](docs/runbooks/OPERATIONAL_RUNBOOK.md)
 - [Deployment Runbook (Phase 4)](docs/runbooks/DEPLOYMENT_RUNBOOK.md)
 - [Data Quality Runbook (Phase 5)](docs/runbooks/DATA_QUALITY_RUNBOOK.md)
+- [Release Runbook (Phase 6)](docs/runbooks/RELEASE_RUNBOOK.md)
 - [Source evaluation](docs/sources/SOURCE_EVALUATION.md)
 
 ## Safety boundary
