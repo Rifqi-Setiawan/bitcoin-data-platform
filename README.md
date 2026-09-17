@@ -178,13 +178,110 @@ bitcoin-data query \
 
 Results are printed as JSON arrays to stdout.
 
+### Incremental load (Phase 3)
+
+To execute a watermark-based incremental update (fetching from `watermark - overlap` to the current completed UTC hour, promoting to Parquet, and advancing the watermark):
+
+```bash
+bitcoin-data incremental \
+  --raw-dir ./data/raw \
+  --curated-dir ./data/curated \
+  --db-path ./data/state/platform.duckdb \
+  --overlap-hours 48
+```
+
+The watermark only advances forward monotonically after successful quality checks and Parquet promotion. If no watermark exists yet, the command cleanly exits with code `2`. Concurrency is protected by run locking (exit code `6` if a run is already active).
+
+Example incremental run summary:
+
+```json
+{
+  "run_id": "9b12e345-6789-4def-9012-3456789abcde",
+  "status": "success",
+  "mode": "incremental",
+  "old_watermark_utc": "2026-01-01T00:00:00Z",
+  "new_watermark_utc": "2026-01-02T12:00:00Z",
+  "windows_planned": 1,
+  "windows_succeeded": 1,
+  "windows_failed": 0,
+  "candles_ingested": 36,
+  "raw_envelopes_read": 3,
+  "rows_promoted": 60,
+  "partitions_written": 1,
+  "curated_dir": "./data/curated",
+  "db_path": "./data/state/platform.duckdb"
+}
+```
+
+### Operational status (Phase 3)
+
+To inspect platform watermark freshness, run history, curated data statistics, gap detection, and run lock state:
+
+```bash
+bitcoin-data status \
+  --db-path ./data/state/platform.duckdb \
+  --curated-dir ./data/curated
+```
+
+Example status JSON output:
+
+```json
+{
+  "watermark_utc": "2026-01-02T12:00:00Z",
+  "watermark_age_hours": 1.5,
+  "last_run": {
+    "run_id": "9b12e345-6789-4def-9012-3456789abcde",
+    "mode": "incremental",
+    "status": "SUCCEEDED",
+    "completed_at_utc": "2026-01-02T13:30:00Z",
+    "rows_promoted": 60
+  },
+  "last_success": {
+    "run_id": "9b12e345-6789-4def-9012-3456789abcde",
+    "completed_at_utc": "2026-01-02T13:30:00Z"
+  },
+  "last_failure": null,
+  "curated_stats": {
+    "total_rows": 60,
+    "min_candle_utc": "2026-01-01T00:00:00Z",
+    "max_candle_utc": "2026-01-02T12:00:00Z",
+    "partitions": 1,
+    "total_size_bytes": 12800
+  },
+  "gaps": [],
+  "is_locked": false
+}
+```
+
+### Repair curated layer (Phase 3)
+
+To rebuild the curated Parquet layer completely from all raw envelopes without lowering the pipeline watermark:
+
+```bash
+bitcoin-data repair \
+  --raw-dir ./data/raw \
+  --curated-dir ./data/curated \
+  --db-path ./data/state/platform.duckdb
+```
+
+Use `--force` to clear stale locks older than 1 hour if an earlier run was abandoned:
+
+```bash
+bitcoin-data repair \
+  --raw-dir ./data/raw \
+  --curated-dir ./data/curated \
+  --db-path ./data/state/platform.duckdb \
+  --force
+```
+
 #### Exit codes
 
-- `0`: Success (operation completed successfully).
-- `2`: Invalid input parameters or query execution error.
+- `0`: Success (operation completed successfully, or nothing to fetch).
+- `2`: Invalid input parameters, missing watermark for incremental, or query execution error.
 - `3`: Source unavailable (Coinbase API unavailable after exhausting all retry attempts).
 - `4`: Contract or quality check failure (malformed payload or invariant violation).
 - `5`: Storage failure (disk, Parquet, or database write failure).
+- `6`: Concurrent run detected (run lock actively held).
 
 ## Quality gates
 
@@ -210,6 +307,7 @@ make test       # pytest test suite
 - [Phase 1A Specification](docs/specs/PHASE_1A_BOOTSTRAP_WINDOW_PLANNER.md)
 - [Phase 1B Specification](docs/specs/PHASE_1B_COINBASE_CLIENT_RAW_INGESTION.md)
 - [Phase 2 Specification](docs/specs/PHASE_2_CURATED_PARQUET_DUCKDB.md)
+- [Phase 3 Specification](docs/specs/PHASE_3_INCREMENTAL_WATERMARK.md)
 - [Data Engineering concept map](docs/learning/DE_CONCEPT_MAP.md)
 - [Source evaluation](docs/sources/SOURCE_EVALUATION.md)
 - [Hermes implementation workflow](docs/IMPLEMENTATION_WORKFLOW.md)
