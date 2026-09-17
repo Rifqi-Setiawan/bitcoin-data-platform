@@ -99,6 +99,46 @@ Example JSON output (601 hours partitioned into two 300-hour windows and one 1-h
 }
 ```
 
+### Execute backfill (Phase 1B)
+
+To execute a full backfill pipeline (plan windows, fetch from Coinbase Exchange with retries/rate-limiting, validate against contract, and write atomic raw envelopes):
+
+```bash
+bitcoin-data backfill \
+  --start 2026-01-01T00:00:00Z \
+  --end 2026-01-02T00:00:00Z \
+  --output-dir ./data/raw
+```
+
+The command outputs a structured JSON run summary to stdout and logs structured JSON events to stderr.
+
+Example run summary:
+
+```json
+{
+  "run_id": "843195da-79aa-4df7-8094-0cfc3b7a58ad",
+  "status": "success",
+  "requested_start_utc": "2026-01-01T00:00:00Z",
+  "requested_end_utc": "2026-01-02T00:00:00Z",
+  "windows_planned": 1,
+  "windows_succeeded": 1,
+  "windows_failed": 0,
+  "candles_ingested": 24,
+  "output_dir": "./data/raw",
+  "files_written": [
+    "data/raw/843195da-79aa-4df7-8094-0cfc3b7a58ad_20260101T00Z_20260102T00Z.json.gz"
+  ]
+}
+```
+
+#### Exit codes
+
+- `0`: Success (all planned windows fetched, validated, and persisted).
+- `2`: Invalid input parameters (malformed timestamp, non-UTC offset, unaligned hour, or invalid range).
+- `3`: Source unavailable (Coinbase API unavailable after exhausting all retry attempts).
+- `4`: Contract violation (Coinbase returned malformed candle tuples or rule violations).
+- `5`: Storage failure (disk write error or filesystem failure during atomic file persistence).
+
 ## Quality gates
 
 Run the documented quality gates:
@@ -121,6 +161,7 @@ make test       # pytest test suite
 - [Decision log](docs/decisions/README.md)
 - [Roadmap](docs/roadmap/ROADMAP.md)
 - [Phase 1A Specification](docs/specs/PHASE_1A_BOOTSTRAP_WINDOW_PLANNER.md)
+- [Phase 1B Specification](docs/specs/PHASE_1B_COINBASE_CLIENT_RAW_INGESTION.md)
 - [Data Engineering concept map](docs/learning/DE_CONCEPT_MAP.md)
 - [Source evaluation](docs/sources/SOURCE_EVALUATION.md)
 - [Hermes implementation workflow](docs/IMPLEMENTATION_WORKFLOW.md)
