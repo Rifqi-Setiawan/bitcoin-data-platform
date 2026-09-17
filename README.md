@@ -131,13 +131,60 @@ Example run summary:
 }
 ```
 
+### Promote to curated Parquet and DuckDB (Phase 2)
+
+To normalize and promote raw envelopes into typed, annual Parquet partitions and register DuckDB analytical views:
+
+```bash
+bitcoin-data promote \
+  --raw-dir ./data/raw \
+  --curated-dir ./data/curated \
+  --db-path ./data/state/platform.duckdb
+```
+
+The command reads raw gzip JSON envelopes, normalizes them into typed records with Decimal price/volume fields, applies blocking quality invariants, deduplicates by natural key (`source`, `product_id`, `granularity_seconds`, `candle_start_utc`), writes annual Parquet partitions atomically, and initializes DuckDB views (`fact_market_candle_hourly`, `mart_btc_usd_daily`) and pipeline `run_metadata`.
+
+Example run summary:
+
+```json
+{
+  "run_id": "4b5f4d89-4fa2-4bf1-bfd0-4bf69d671c6d",
+  "status": "success",
+  "raw_envelopes_read": 1,
+  "rows_promoted": 24,
+  "partitions_written": 1,
+  "curated_dir": "./data/curated",
+  "db_path": "./data/state/platform.duckdb"
+}
+```
+
+### Query curated views (Phase 2)
+
+To execute SQL queries directly against the DuckDB analytical tables and views:
+
+```bash
+bitcoin-data query \
+  --db-path ./data/state/platform.duckdb \
+  --sql "SELECT * FROM fact_market_candle_hourly LIMIT 5"
+```
+
+Or query the daily mart aggregation:
+
+```bash
+bitcoin-data query \
+  --db-path ./data/state/platform.duckdb \
+  --sql "SELECT trade_date_utc, open, high, low, close, volume_base, observed_hour_count, is_complete FROM mart_btc_usd_daily"
+```
+
+Results are printed as JSON arrays to stdout.
+
 #### Exit codes
 
-- `0`: Success (all planned windows fetched, validated, and persisted).
-- `2`: Invalid input parameters (malformed timestamp, non-UTC offset, unaligned hour, or invalid range).
+- `0`: Success (operation completed successfully).
+- `2`: Invalid input parameters or query execution error.
 - `3`: Source unavailable (Coinbase API unavailable after exhausting all retry attempts).
-- `4`: Contract violation (Coinbase returned malformed candle tuples or rule violations).
-- `5`: Storage failure (disk write error or filesystem failure during atomic file persistence).
+- `4`: Contract or quality check failure (malformed payload or invariant violation).
+- `5`: Storage failure (disk, Parquet, or database write failure).
 
 ## Quality gates
 
@@ -162,6 +209,7 @@ make test       # pytest test suite
 - [Roadmap](docs/roadmap/ROADMAP.md)
 - [Phase 1A Specification](docs/specs/PHASE_1A_BOOTSTRAP_WINDOW_PLANNER.md)
 - [Phase 1B Specification](docs/specs/PHASE_1B_COINBASE_CLIENT_RAW_INGESTION.md)
+- [Phase 2 Specification](docs/specs/PHASE_2_CURATED_PARQUET_DUCKDB.md)
 - [Data Engineering concept map](docs/learning/DE_CONCEPT_MAP.md)
 - [Source evaluation](docs/sources/SOURCE_EVALUATION.md)
 - [Hermes implementation workflow](docs/IMPLEMENTATION_WORKFLOW.md)
