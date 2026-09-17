@@ -530,6 +530,71 @@ class DuckDBManager:
         """
         con.execute(sql)
 
+    def create_network_fact_view(self) -> None:
+        """Create or replace view fact_network_metrics_daily pointing to on-chain Parquet files."""
+        con = self.get_connection()
+        parquet_glob = str(
+            self.curated_dir.resolve()
+            / "onchain"
+            / "network_metrics_daily"
+            / "source=*"
+            / "year=*"
+            / "*.parquet"
+        )
+        existing_files = list(
+            self.curated_dir.glob("onchain/network_metrics_daily/source=*/year=*/*.parquet")
+        )
+
+        if existing_files:
+            sql = f"""
+            CREATE OR REPLACE VIEW fact_network_metrics_daily AS
+            SELECT * FROM read_parquet('{parquet_glob}', hive_partitioning=true);
+            """
+        else:
+            # Fallback view with full schema when no files are present yet
+            sql = """
+            CREATE OR REPLACE VIEW fact_network_metrics_daily AS
+            SELECT
+                CAST(NULL AS VARCHAR) AS source,
+                CAST(NULL AS VARCHAR) AS asset,
+                CAST(NULL AS TIMESTAMPTZ) AS metric_date_utc,
+                CAST(NULL AS BIGINT) AS transaction_count,
+                CAST(NULL AS BIGINT) AS active_addresses_count,
+                CAST(NULL AS TIMESTAMPTZ) AS ingested_at_utc,
+                CAST(NULL AS VARCHAR) AS source_run_id,
+                CAST(NULL AS INTEGER) AS year
+            WHERE 1=0;
+            """
+        con.execute(sql)
+
+    def create_cross_domain_mart_view(self) -> None:
+        """Create or replace conformed cross-domain view mart_btc_market_and_network_daily."""
+        con = self.get_connection()
+        sql = """
+        CREATE OR REPLACE VIEW mart_btc_market_and_network_daily AS
+        SELECT
+            COALESCE(m.trade_date_utc, n.metric_date_utc) AS trade_date_utc,
+            'BTC' AS asset,
+            m.open AS market_open_usd,
+            m.high AS market_high_usd,
+            m.low AS market_low_usd,
+            m.close AS market_close_usd,
+            m.volume_base AS market_volume_btc,
+            m.observed_hour_count AS market_observed_hour_count,
+            m.is_complete AS is_market_day_complete,
+            n.transaction_count,
+            n.active_addresses_count,
+            CASE
+                WHEN n.active_addresses_count > 0
+                THEN ROUND(CAST(n.transaction_count AS DOUBLE) / n.active_addresses_count, 4)
+                ELSE NULL
+            END AS tx_per_active_address
+        FROM mart_btc_usd_daily m
+        FULL OUTER JOIN fact_network_metrics_daily n
+            ON m.trade_date_utc = n.metric_date_utc;
+        """
+        con.execute(sql)
+
     def initialize(self) -> None:
         """Initialize database schema, tables, and views."""
         self.create_metadata_table()
@@ -537,6 +602,8 @@ class DuckDBManager:
         self.create_quality_checks_table()
         self.create_hourly_view()
         self.create_daily_mart_view()
+        self.create_network_fact_view()
+        self.create_cross_domain_mart_view()
 
     def record_run(
         self,
