@@ -1,0 +1,35 @@
+[Unit]
+Description=Bitcoin Data Engineering Platform - Incremental Ingestion & Promotion
+Documentation=https://github.com/Rifqi-Setiawan/bitcoin-data-platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=bitcoin-data
+Group=bitcoin-data
+EnvironmentFile=-/etc/bitcoin-data/bitcoin-data.env
+ExecStart=/srv/apps/services/bitcoin-data-platform/.venv/bin/bitcoin-data incremental \
+    --raw-dir /srv/data/bitcoin-data-platform/raw \
+    --curated-dir /srv/data/bitcoin-data-platform/curated \
+    --db-path /srv/data/bitcoin-data-platform/state/platform.duckdb \
+    --overlap-hours 48
+
+# Security & Sandboxing
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/srv/data/bitcoin-data-platform /tmp
+ReadOnlyPaths=/srv/apps/services/bitcoin-data-platform
+
+# Resource Limits (Prevent interference with VPS host services)
+MemoryMax=1G
+CPUQuota=100%
+
+# Logging
+StandardOutput=journal
+StandardError=journal

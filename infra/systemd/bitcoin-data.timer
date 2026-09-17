@@ -1,0 +1,12 @@
+[Unit]
+Description=Hourly Schedule for Bitcoin Data Platform Incremental Ingestion
+Documentation=https://github.com/Rifqi-Setiawan/bitcoin-data-platform
+
+[Timer]
+OnCalendar=*-*-* *:10:00
+RandomizedDelaySec=120
+Persistent=true
+Unit=bitcoin-data.service
+
+[Install]
+WantedBy=timers.target
