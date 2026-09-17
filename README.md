@@ -1,40 +1,62 @@
 # Bitcoin Data Engineering Platform
 
-A production-style, single-host Bitcoin data platform built as a data engineering portfolio project. Demonstrates intentional system design — from source contracts and deterministic ingestion to analytical modeling — without unnecessary enterprise complexity.
+This repository is the architecture and implementation workspace for a production-style,
+single-host Bitcoin data platform and public data-engineering portfolio project.
 
-## Current Status: Phase 1A ✅
+## Phase 1A: Repository Bootstrap and Window Planner
 
-**Repository Bootstrap and Deterministic Window Planner** — the executable foundation for batch ingestion.
+Phase 1A provides the executable foundation for deterministic batch ingestion: an installable
+Python 3.12 package and the `bitcoin-data` CLI with the `plan-backfill` command.
 
-An installable Python 3.12 package with the `bitcoin-data` CLI and `plan-backfill` command. Strictly offline: no network requests, no runtime data. Validates an operator-specified half-open UTC interval and deterministically partitions it into Coinbase-compatible request windows of at most 300 hourly candles.
+This slice is strictly offline: it performs no network requests and writes no runtime data.
+It validates an operator-specified half-open UTC interval and deterministically partitions it
+into Coinbase-compatible request windows of at most 300 hourly candles.
 
-### Core Semantics
+### Core semantics
 
-- **UTC timestamps** — All timestamps must be explicit UTC (`2026-01-01T00:00:00Z` or `+00:00`). Naive datetimes and non-UTC offsets are rejected.
-- **Half-open interval `[start, end)`** — Start is included, end is excluded.
-- **Hourly boundary alignment** — Both boundaries must align to an exact hour.
-- **Coinbase window limit** — Each window contains 1–300 expected hourly candles (granularity: 3600s, product: BTC-USD).
-- **No open/future candles** — End boundary must not exceed the current UTC hour.
-- **Deterministic output** — Identical inputs always produce byte-equivalent JSON.
-- **Safe failure** — Invalid input prints a concise error to stderr, outputs nothing to stdout, exits with status `2`.
+- **UTC timestamps**: All timestamps must be explicit UTC, formatted as ISO-8601 (e.g.
+  `2026-01-01T00:00:00Z` or `2026-01-01T00:00:00+00:00`). Output is normalized to canonical
+  `YYYY-MM-DDTHH:00:00Z`. Naive datetimes and non-UTC offsets are strictly rejected.
+- **Half-open interval `[start, end)`**: The start timestamp is included; the end timestamp is
+  excluded.
+- **Hourly boundary alignment**: Both `start` and `end` must align to an exact hour
+  (`minute=0`, `second=0`, `microsecond=0`).
+- **Coinbase window limit**: Each request window contains between 1 and 300 expected hourly candles
+  (granularity: 3600 seconds, product: `BTC-USD`, source: `coinbase_exchange`).
+- **No open/future candles**: The `end` boundary must not exceed the start of the current UTC hour.
+- **Deterministic output**: Identical inputs always produce byte-equivalent JSON output with
+  stable key ordering.
+- **Safe failure**: Invalid input prints a concise error message to stderr, outputs nothing to stdout,
+  and exits with status `2`.
 
-## Quick Start
+## Environment setup
 
-**Requirements:** Python 3.12+
+Target Python version: **Python 3.12**.
 
 ```bash
+# Create and activate virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Install with dev dependencies
+# Install development dependencies and editable package
 make install
 
-# Or manually:
+# Alternatively, using pip directly:
 pip install -r requirements-dev.txt
 pip install -e .
 ```
 
-## CLI Usage
+## CLI usage
+
+Run `bitcoin-data --help` to view available commands:
+
+```bash
+bitcoin-data --help
+```
+
+### Plan backfill
+
+To generate a deterministic backfill plan for a UTC interval:
 
 ```bash
 bitcoin-data plan-backfill \
@@ -42,7 +64,7 @@ bitcoin-data plan-backfill \
   --end 2026-01-26T01:00:00Z
 ```
 
-Output (601 hours → 3 windows):
+Example JSON output (601 hours partitioned into two 300-hour windows and one 1-hour window):
 
 ```json
 {
@@ -77,61 +99,73 @@ Output (601 hours → 3 windows):
 }
 ```
 
-## Quality Gates
+### Execute backfill (Phase 1B)
+
+To execute a full backfill pipeline (plan windows, fetch from Coinbase Exchange with retries/rate-limiting, validate against contract, and write atomic raw envelopes):
 
 ```bash
-make check       # All gates: lint + typecheck + test
-make lint        # ruff check + format verification
-make typecheck   # mypy strict static typing
-make test        # pytest (81 offline tests)
+bitcoin-data backfill \
+  --start 2026-01-01T00:00:00Z \
+  --end 2026-01-02T00:00:00Z \
+  --output-dir ./data/raw
 ```
 
-## Project Structure
+The command outputs a structured JSON run summary to stdout and logs structured JSON events to stderr.
 
+Example run summary:
+
+```json
+{
+  "run_id": "843195da-79aa-4df7-8094-0cfc3b7a58ad",
+  "status": "success",
+  "requested_start_utc": "2026-01-01T00:00:00Z",
+  "requested_end_utc": "2026-01-02T00:00:00Z",
+  "windows_planned": 1,
+  "windows_succeeded": 1,
+  "windows_failed": 0,
+  "candles_ingested": 24,
+  "output_dir": "./data/raw",
+  "files_written": [
+    "data/raw/843195da-79aa-4df7-8094-0cfc3b7a58ad_20260101T00Z_20260102T00Z.json.gz"
+  ]
+}
 ```
-src/bitcoin_data_platform/
-├── cli.py              # CLI entry point and argument parsing
-├── time_range.py       # UTC timestamp parsing and validation
-├── window_planner.py   # Deterministic window planning algorithm
-├── ingestion/          # Ingestion module
-├── sources/            # Source adapters (planned)
-├── storage/            # Storage layer (planned)
-├── transforms/         # Data transformations (planned)
-└── quality/            # Data quality checks (planned)
 
-tests/
-├── test_cli.py
-├── test_time_range.py
-└── test_window_planner.py
+#### Exit codes
+
+- `0`: Success (all planned windows fetched, validated, and persisted).
+- `2`: Invalid input parameters (malformed timestamp, non-UTC offset, unaligned hour, or invalid range).
+- `3`: Source unavailable (Coinbase API unavailable after exhausting all retry attempts).
+- `4`: Contract violation (Coinbase returned malformed candle tuples or rule violations).
+- `5`: Storage failure (disk write error or filesystem failure during atomic file persistence).
+
+## Quality gates
+
+Run the documented quality gates:
+
+```bash
+# Run all quality gates (linter, type checker, tests)
+make check
+
+# Or run individual checks:
+make lint       # ruff check and ruff format --check
+make format     # ruff auto-formatting
+make typecheck  # mypy strict static typing
+make test       # pytest test suite
 ```
 
-## Documentation
+## Current documents
 
-- [Master Plan](docs/MASTER_PLAN.md) — Project scope, constraints, architecture, and technology decisions
-- [Architecture V1](docs/architecture/ARCHITECTURE_V1.md) — Single-host batch platform design
-- [Roadmap](docs/roadmap/ROADMAP.md) — Progressive 11-phase development plan
-- [Decision Log](docs/decisions/README.md) — Architecture decisions with trade-offs
-- [Source Evaluation](docs/sources/SOURCE_EVALUATION.md) — Data source comparison and selection rationale
-- [Phase 1A Spec](docs/specs/PHASE_1A_BOOTSTRAP_WINDOW_PLANNER.md) — Window planner specification
+- [Master plan](docs/MASTER_PLAN.md)
+- [Architecture V1](docs/architecture/ARCHITECTURE_V1.md)
+- [Decision log](docs/decisions/README.md)
+- [Roadmap](docs/roadmap/ROADMAP.md)
+- [Phase 1A Specification](docs/specs/PHASE_1A_BOOTSTRAP_WINDOW_PLANNER.md)
+- [Phase 1B Specification](docs/specs/PHASE_1B_COINBASE_CLIENT_RAW_INGESTION.md)
+- [Data Engineering concept map](docs/learning/DE_CONCEPT_MAP.md)
+- [Source evaluation](docs/sources/SOURCE_EVALUATION.md)
+- [Hermes implementation workflow](docs/IMPLEMENTATION_WORKFLOW.md)
 
-## Roadmap Overview
+## Safety boundary
 
-| Phase | Focus | Status |
-|-------|-------|--------|
-| 0 | Architecture and documentation | ✅ Done |
-| 1A | Repository bootstrap and window planner | ✅ Done |
-| 1B | Coinbase API client and raw ingestion | 🔜 Next |
-| 2 | Curated Parquet and DuckDB modeling | Planned |
-| 3 | Incremental loads and recovery | Planned |
-| 4 | Single-host orchestration (systemd) | Planned |
-| 5 | Data quality and observability | Planned |
-| 6 | CI/CD and reproducible delivery | Planned |
-| 7+ | Second domain, research serving, streaming, AI ops | Planned |
-
-## Safety Boundary
-
-This project is for **data engineering and Bitcoin market research**. It does not place trades, provide buy/sell decisions, expose a database publicly, or depend on AI for pipeline correctness.
-
-## License
-
-[MIT](LICENSE)
+This project is for data engineering and Bitcoin research. It does not place trades, provide automated buy/sell decisions, expose a database publicly, or depend on an AI agent for pipeline correctness.

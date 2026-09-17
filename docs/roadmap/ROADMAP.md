@@ -139,10 +139,10 @@ Each phase solves the next observed problem. A phase is complete only when its o
 
 - **Objective:** Add auditable assistance where it reduces investigation/research effort without controlling money or silently changing data.
 - **Prerequisites:** Trustworthy metadata, run history, data dictionary, read-only query boundary, evaluation cases.
-- **Components:** Read-only tool access, provider routing, query limits, audit log, incident/research prompt templates, human approval boundary.
+- **Components:** Hermes read-only tool access, 9Router provider routing, query limits, audit log, incident/research prompt templates, human approval boundary.
 - **Concepts:** Tool authorization, grounding, provenance, evaluation, least privilege, human-in-the-loop operations.
 - **Expected output:** Agent answers health/research questions with SQL, run IDs, data timestamps, and uncertainty.
-- **Tests:** Prompt-injection fixtures, forbidden write attempts, hallucinated metric names, expensive query limits, provider outage, incident benchmark.
+- **Tests:** Prompt-injection fixtures, forbidden write attempts, hallucinated metric names, expensive query limits, outage of 9Router, incident benchmark.
 - **Portfolio value:** Practical AI/DataOps integration instead of a chatbot veneer.
 - **Definition of done:** Core pipeline is unaffected by AI outage; outputs are traceable; writes/service control require explicit authorization; no trading path exists.
 - **Interview outcome:** Explain where LLMs help, where deterministic rules are safer, and how permissions/evals reduce risk.

@@ -11,35 +11,61 @@ Build the platform as a sequence of small, complete systems. Version 1 should in
 
 This is intentionally a single-host batch architecture. It needs no Kafka, Spark, Kubernetes, database server, object-store service, or public port. The initial dataset is small enough for one Python process and DuckDB, yet rich enough to teach source contracts, pagination, backfills, watermarks, idempotency, data quality, columnar storage, analytical modeling, orchestration, observability, and recovery.
 
-The planned public repository is `bitcoin-data-platform`. Code and persistent data/state are kept in separate directories to ensure deployments never overwrite runtime state and Git never tracks data.
+The planned public repository is `bitcoin-data-platform`. The recommended VPS locations are:
 
-## 2. Deployment Environment
+- Code: `/srv/apps/services/bitcoin-data-platform`
+- Persistent data and run state: `/srv/data/bitcoin-data-platform`
+- Local planning seed: `C:\Users\Rifqi\Documents\ChatGPT\VPS\bitcoin-data-platform`
 
-### Requirements
+The local seed is not yet a Git repository and nothing has been deployed. Repository initialization and the first source contract are the next implementation phase.
 
-| Area | Requirement |
+## 2. Current VPS Audit
+
+### Audit confidence and limitation
+
+The inventory below comes from workspace records verified earlier on 2026-09-16. A fresh read-only SSH attempt during this planning session reached the host but authentication failed with `Permission denied (publickey,password)`. Therefore this is a **same-day known baseline, not a fresh live snapshot**. Re-run the audit before deployment.
+
+No infrastructure was changed during this audit.
+
+### Known baseline
+
+| Area | Observed state |
 |---|---|
-| OS | Ubuntu 24.04 LTS or compatible Linux distribution |
-| Runtime | Python 3.12+, Git |
-| Storage | Sufficient persistent disk for raw JSON envelopes and curated Parquet files |
-| Network | Outbound HTTPS only; no inbound application port required |
-| Security | Dedicated unprivileged Unix account; secrets excluded from Git |
+| Host | `Rifqi-studio`, Microsoft Azure Central India, `Standard_GS2` |
+| OS | Ubuntu 24.04.5 LTS, kernel `6.17.0-1022-azure`, x86-64 |
+| Compute | 4 vCPU, Intel Xeon Platinum 8370C @ 2.80 GHz |
+| Memory | About 54 GiB usable, no swap |
+| Persistent storage | 64 GiB OS disk; ext4 root filesystem about 61 GiB usable and about 7.2 GiB used at the recorded audit |
+| Ephemeral storage | About 110 GiB at `/mnt`; Azure resource disk, unsuitable for persistent data or backups |
+| Runtime | Python 3.12.3, Git 2.43.0, Docker Engine 29.8.1, Docker Compose v5.5.1 |
+| Public network | SSH on TCP 22; UFW default-deny inbound/routed, only SSH allowed |
+| Private listeners | 9Router on `127.0.0.1:20128` |
+| Containers | Official 9Router image, recorded healthy and loopback-bound |
+| Services | Docker, containerd, 9Router, `hermes-gateway-345107e9.service` |
+| Hermes | Agent 0.21.3 under a dedicated unprivileged account; model/provider configuration pending |
+| Persistent layout | `/srv/infrastructure`, `/srv/apps/9router`, `/srv/apps/hermes`, and empty/future app groupings under `/srv/apps` |
+| Existing repositories | Infrastructure source of truth at `/srv/infrastructure`; no Bitcoin platform repository recorded |
+| Security posture | Hermes has no sudo or Docker socket access; secrets and runtime state are excluded from Git; password SSH remains enabled pending proven key access |
 
-### Pre-deployment checks
+### Mandatory pre-deployment revalidation
 
-Before creating directories or services, verify:
+Before creating directories or units on the VPS, capture and review:
 
-1. Available disk space and filesystem layout.
-2. Python version and virtual environment support.
-3. Network egress to Coinbase Exchange API.
-4. No conflicting port bindings or service names.
+1. `hostnamectl`, `lscpu`, `free -h`, `uptime`.
+2. `lsblk`, `df -hT / /srv /mnt`, and inode usage.
+3. `docker ps`, `docker system df`, running/failed systemd units, and timers.
+4. `ss -lntup`, UFW status, and Azure network-security rules.
+5. `/srv` ownership, repositories, and current Git status.
+6. Highest-memory processes and current disk consumers.
+
+Bound outputs and redact secret values. Do not inspect `.env` contents merely to prove that they exist.
 
 ## 3. Constraints
 
 ### Compute and memory
 
 - Four vCPUs are enough for Python, DuckDB, Parquet, tests, and modest local analytics.
-- Memory is generous relative to V1 data volume, but DuckDB should still have an explicit memory limit so a malformed query cannot contend with other services.
+- Memory is generous relative to V1 data volume, but DuckDB should still have an explicit memory limit so a malformed query cannot contend with 9Router or Hermes.
 - No swap means an out-of-memory event has less graceful fallback. Keep transformations bounded and monitor RSS.
 
 ### Storage
@@ -53,7 +79,7 @@ Before creating directories or services, verify:
 
 - This is a single-host system. Maintenance or host failure pauses ingestion.
 - The owner is learning the system, so every automated path needs a manual equivalent and a recovery runbook.
-- Existing workloads share CPU, memory, root storage, journald, and operational attention.
+- Existing 9Router and Hermes workloads share CPU, memory, root storage, journald, and operational attention.
 - Live SSH must be restored or explicitly provided before deployment verification can be trusted.
 
 ### Network and security
@@ -146,7 +172,7 @@ Detailed behavior is in [ARCHITECTURE_V1.md](architecture/ARCHITECTURE_V1.md).
 ### V1 layout
 
 ```text
-data/
+/srv/data/bitcoin-data-platform/
 ├── raw/coinbase_exchange/candles/BTC-USD/ingestion_date=YYYY-MM-DD/*.json.gz
 ├── curated/market/candles_hourly/source=coinbase_exchange/year=YYYY/*.parquet
 ├── state/platform.duckdb
@@ -363,9 +389,9 @@ Summary:
 
 ## 16. Data Engineering Concept Map
 
-Concepts are introduced when a real project problem appears rather than as a checklist. Each phase in the roadmap lists the concepts it teaches.
+See [DE_CONCEPT_MAP.md](learning/DE_CONCEPT_MAP.md). Concepts are introduced when a real project problem appears rather than as a checklist.
 
-## 17. AI Integration Roadmap
+## 17. AI / Hermes Integration Roadmap
 
 ### Useful later
 
@@ -376,14 +402,14 @@ Concepts are introduced when a real project problem appears rather than as a che
 - Summarize monthly Bitcoin observations from reproducible SQL outputs and cite data timestamps/sources.
 - Propose remediation steps, but require approval before reruns, backfills, deletes, deployment, or service control.
 
-### Anti-patterns to avoid
+### Gimmicks to avoid
 
 - An agent that simply wraps a deterministic API call.
 - LLM-based anomaly detection before statistical baselines and explicit rules exist.
 - Letting an agent edit curated data directly.
 - Autonomous trading, buy/sell decisions, or portfolio actions.
 - A vector database without a defined corpus, retrieval evaluation, and maintenance owner.
-- Giving an AI agent database write access or secrets merely for convenience.
+- Giving Hermes sudo, Docker socket, database write access, or secrets merely for convenience.
 
 ### Safe integration sequence
 
@@ -393,7 +419,7 @@ Concepts are introduced when a real project problem appears rather than as a che
 4. Human-approved operational suggestions.
 5. Narrow, reversible execution capabilities only after authorization and evaluation.
 
-The batch platform must continue to run when AI services are unavailable.
+9Router remains model/provider infrastructure, not a data-pipeline dependency. The batch platform must continue to run when AI services are unavailable.
 
 ## 18. Future Scaling Path
 

@@ -52,9 +52,9 @@ This log is intentionally lightweight. Promote a decision to a numbered ADR when
 
 ## D-007 — Separate code and persistent data
 
-- **Decision:** Code and data/state are kept in separate directory trees.
+- **Decision:** Code under `/srv/apps/services/bitcoin-data-platform`; data/state under `/srv/data/bitcoin-data-platform`.
 - **Reason:** Deployments must not overwrite runtime state, and Git must never track data.
-- **Alternatives:** Store `data/` inside the repository.
+- **Alternatives:** Store `data/` inside the repository; use `/mnt`.
 - **Trade-offs:** Deployment needs ownership and path configuration.
 - **Reconsider when:** Object storage replaces local persistent data.
 

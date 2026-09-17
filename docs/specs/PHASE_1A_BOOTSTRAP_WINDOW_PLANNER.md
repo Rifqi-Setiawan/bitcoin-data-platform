@@ -1,7 +1,11 @@
 # Phase 1A Implementation Specification — Repository Bootstrap and Window Planner
 
-Status: complete
+Status: approved for Hermes implementation
 Parent phase: Phase 1 — Repository bootstrap and deterministic raw ingestion
+Task ID: `P1A-window-planner`
+Recommended branch: `hermes/P1A-window-planner`
+Implementation profile: `btc-coder`
+Verification profile: `btc-verifier`
 
 ## 1. Objective
 
@@ -50,7 +54,7 @@ contiguous windows of at most 300 hours.
 - Raw gzip envelopes, checksums, quarantine, or runtime data directories.
 - Parquet, DuckDB, transformations, watermarks, incremental mode, or status mode.
 - Docker, systemd, cron, long-running processes, or deployment.
-- Any modification to system services, infrastructure, or data directories outside the project.
+- Any modification under `/srv/apps`, `/etc`, `/srv/infrastructure`, or `/srv/data`.
 - Any public listener, credential, trading, wallet, signal, or financial-advice behavior.
 
 ## 4. Functional contract
@@ -164,7 +168,7 @@ All tests are offline and deterministic.
 
 ## 7. Acceptance criteria
 
-The implementation is ready for review only when all criteria below are satisfied.
+The card is ready for Codex review only when all criteria below are satisfied.
 
 ### AC-1 — Clean bootstrap
 
@@ -200,8 +204,8 @@ and creates or modifies no runtime data file.
 ### AC-7 — Quality gate
 
 The repository-documented formatter check, linter, type checker, and complete offline test suite all
-exit `0`. The documented formatter check, linter, type checker, and complete offline test suite must all
-pass with exact commands and summarized results reported.
+exit `0`. Hermes must report the exact commands and summarized results; it must not claim a tool ran
+if the tool is not configured.
 
 ### AC-8 — Documentation and repository hygiene
 
@@ -211,13 +215,13 @@ credential, generated data, virtual environment, cache, or runtime output is com
 
 ### AC-9 — Scoped commit
 
-Implementation is committed on a dedicated feature branch with a coherent commit. The handoff names
+Implementation is committed on `hermes/P1A-window-planner` with a coherent commit. The handoff names
 the task and branch, lists changed files, includes validation evidence, identifies assumptions and
 deferred Phase 1 work, and supplies the commit hash.
 
 ## 8. Required validation evidence
 
-The following validation commands must be run and reported. At
+Hermes must run and report the repository's actual commands established by the implementation. At
 minimum, evidence must cover equivalents of:
 
 ```bash
@@ -236,13 +240,13 @@ example. Do not use a live network call as evidence.
 ## 9. Dependencies and sequencing
 
 - Depends on the approved Phase 0 architecture documents already in the repository.
-- Has no dependency on any external inference service at runtime and requires no API key.
-- Must complete review before a separate Phase 1B card adds the Coinbase HTTP client,
+- Has no dependency on 9Router availability at runtime and requires no API key.
+- Must complete and pass Codex review before a separate Phase 1B card adds the Coinbase HTTP client,
   retries, rate limiting, source tuple validation, or raw-envelope persistence.
 
 ## 10. Handoff checklist
 
-The completed implementation must return:
+Hermes must return:
 
 - task ID and branch;
 - concise implementation summary;

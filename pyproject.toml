@@ -12,7 +12,9 @@ requires-python = ">=3.12"
 authors = [
     { name = "Bitcoin Data Platform Contributors" }
 ]
-dependencies = []
+dependencies = [
+    "httpx>=0.28.0",
+]
 
 [project.scripts]
 bitcoin-data = "bitcoin_data_platform.cli:main"
@@ -27,7 +29,10 @@ dev = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q --strict-markers"
+addopts = "-ra -q --strict-markers -m 'not integration'"
+markers = [
+    "integration: marks tests as integration tests that hit external services (deselect with '-m \"not integration\"')",
+]
 testpaths = ["tests"]
 pythonpath = ["src"]
 
