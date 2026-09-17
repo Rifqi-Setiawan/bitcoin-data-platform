@@ -334,6 +334,50 @@ Phase 6 establishes automated CI/CD pipelines, dependency vulnerability scanning
 - **Release Standard Operating Procedure**:
   - Documented release tagging (`v0.1.0`), clean-room virtualenv verification, zero-downtime deployment, and rollback procedures in the **[Release & Deployment Runbook](docs/runbooks/RELEASE_RUNBOOK.md)**.
 
+## Phase 7: Second Data Domain (Coin Metrics On-Chain) & Conformed Modeling
+
+Phase 7 incorporates a second, heterogeneous data domain: on-chain daily network activity from the Coin Metrics Community API v4 (`TxCnt` - Transaction Count, and `AdrActCnt` - Active Address Count). It establishes conformed dimensional modeling in DuckDB to bridge the grain mismatch (hourly market trading vs. daily network activity) while maintaining zero source coupling and independent watermarks:
+
+- **Coin Metrics Client & Contract (`sources/coin_metrics_client.py`, `sources/coin_metrics_contract.py`)**:
+  - Unauthenticated HTTP client targeting `https://community-api.coinmetrics.io/v4/timeseries/asset-metrics`.
+  - Enforces 600ms request spacing (10 req / 6s rate limit), exponential backoff with jitter on 429/5xx, and pagination handling.
+  - Strict contract validation: required fields, midnight UTC boundary alignment, and non-negative counts.
+- **On-Chain Curated Parquet Storage (`storage/network_parquet_writer.py`)**:
+  - Annual partitions at `curated/onchain/network_metrics_daily/source=coin_metrics/year=YYYY/data.parquet`.
+  - PyArrow typed schema (`int64` transaction and active address counts).
+  - Atomic temporary-file replacement and idempotent deduplication on `(source, asset, metric_date_utc)`.
+- **Conformed DuckDB Views (`storage/duckdb_manager.py`)**:
+  - `fact_network_metrics_daily`: Fact view reading on-chain Parquet files via Hive partitioning with typed empty fallback.
+  - `mart_btc_market_and_network_daily`: Conformed cross-domain mart performing a `FULL OUTER JOIN` between `mart_btc_usd_daily` and `fact_network_metrics_daily` on UTC date (`trade_date_utc`), calculating `tx_per_active_address` and preserving market completeness flags.
+  - Independent watermark tracking for `coin_metrics_daily`.
+- **Architecture Decision Record**:
+  - **[ADR D-009: dbt-core Evaluation](docs/decisions/D-009_DBT_EVALUATION.md)**: Objective architectural evaluation comparing `dbt-core` adoption vs. managed native DuckDB SQL views for single-host pipelines.
+
+### Fetch on-chain network metrics
+
+```bash
+bitcoin-data fetch-network \
+  --start 2026-01-01 \
+  --end 2026-01-07 \
+  --output-dir ./data/raw/coin_metrics
+```
+
+### Promote on-chain network metrics
+
+```bash
+bitcoin-data promote-network \
+  --raw-dir ./data/raw/coin_metrics \
+  --curated-dir ./data/curated \
+  --db-path ./data/state/platform.duckdb
+```
+
+### Query conformed cross-domain mart
+
+```bash
+bitcoin-data query --db-path ./data/state/platform.duckdb \
+  --sql "SELECT trade_date_utc, market_close_usd, market_volume_btc, transaction_count, active_addresses_count, tx_per_active_address FROM mart_btc_market_and_network_daily ORDER BY trade_date_utc DESC LIMIT 7;"
+```
+
 ## Quality gates
 
 Run the documented quality gates:
@@ -367,7 +411,9 @@ make clean-dist # remove build and packaging artifacts
 - [Phase 4 Specification](docs/specs/PHASE_4_SINGLE_HOST_ORCHESTRATION.md)
 - [Phase 5 Specification](docs/specs/PHASE_5_OBSERVABILITY_DATA_QUALITY.md)
 - [Phase 6 Specification](docs/specs/PHASE_6_REPRODUCIBLE_DELIVERY_CICD.md)
+- [Phase 7 Specification](docs/specs/PHASE_7_SECOND_DOMAIN_CONFORMED_MODELING.md)
 - [ADR D-008: Container Evaluation](docs/decisions/D-008_CONTAINER_EVALUATION.md)
+- [ADR D-009: dbt-core Evaluation](docs/decisions/D-009_DBT_EVALUATION.md)
 - [Operational Runbook (Phase 3)](docs/runbooks/OPERATIONAL_RUNBOOK.md)
 - [Deployment Runbook (Phase 4)](docs/runbooks/DEPLOYMENT_RUNBOOK.md)
 - [Data Quality Runbook (Phase 5)](docs/runbooks/DATA_QUALITY_RUNBOOK.md)

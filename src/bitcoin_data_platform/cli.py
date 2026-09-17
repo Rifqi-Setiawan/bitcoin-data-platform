@@ -14,6 +14,18 @@ from typing import Any
 from bitcoin_data_platform.infra import dispatch_failure_alert
 from bitcoin_data_platform.quality import run_dataset_quality_checks
 from bitcoin_data_platform.quality.checks import QualityCheckError
+from bitcoin_data_platform.sources.coin_metrics_client import (
+    CoinMetricsClient,
+    CoinMetricsClientError,
+    CoinMetricsHTTPError,
+)
+from bitcoin_data_platform.sources.coin_metrics_client import (
+    SourceUnavailableError as CoinMetricsSourceUnavailableError,
+)
+from bitcoin_data_platform.sources.coin_metrics_contract import (
+    CoinMetricsContractViolationError,
+    validate_coin_metrics_payload,
+)
 from bitcoin_data_platform.sources.coinbase_client import (
     CoinbaseClient,
     CoinbaseClientError,
@@ -21,6 +33,10 @@ from bitcoin_data_platform.sources.coinbase_client import (
 )
 from bitcoin_data_platform.sources.coinbase_contract import validate_candle_payload
 from bitcoin_data_platform.storage.duckdb_manager import DuckDBManager, DuckDBManagerError
+from bitcoin_data_platform.storage.network_parquet_writer import (
+    NetworkParquetStorageError,
+    write_network_parquet_partitions,
+)
 from bitcoin_data_platform.storage.parquet_writer import (
     ParquetStorageError,
     write_parquet_partitions,
@@ -36,9 +52,26 @@ from bitcoin_data_platform.time_range import (
     parse_iso_utc,
     validate_hourly_boundary,
 )
+from bitcoin_data_platform.transforms.network_normalizer import (
+    create_network_raw_envelope,
+    normalize_network_envelopes,
+    read_network_raw_envelopes,
+    write_network_raw_envelope,
+)
 from bitcoin_data_platform.transforms.normalizer import normalize_envelopes
 from bitcoin_data_platform.transforms.raw_reader import read_raw_envelopes
 from bitcoin_data_platform.window_planner import WindowPlanningError, plan_backfill
+
+
+def _parse_cli_date(val: str, field_name: str) -> datetime:
+    """Parse date or timestamp string into UTC datetime."""
+    raw = val.strip()
+    if len(raw) == 10 and raw.count("-") == 2:
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=UTC)
+        except ValueError as exc:
+            raise TimeRangeError(f"Invalid date format for {field_name}: {raw}") from exc
+    return parse_iso_utc(raw, field_name)
 
 
 def _log_event(level: str, event: str, **kwargs: Any) -> None:
@@ -355,6 +388,71 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional failure message text to scrub and alert.",
     )
 
+    # 9. fetch-network command
+    fetch_net_parser = subparsers.add_parser(
+        "fetch-network",
+        help="Fetch daily on-chain network metrics from Coin Metrics Community API v4.",
+        description=(
+            "Fetch daily on-chain network metrics from Coin Metrics Community API v4 "
+            "and persist raw checksummed gzip JSON envelopes."
+        ),
+    )
+    fetch_net_parser.add_argument(
+        "--start",
+        required=True,
+        help="Start date in YYYY-MM-DD or ISO-8601 UTC (e.g. 2026-01-01).",
+    )
+    fetch_net_parser.add_argument(
+        "--end",
+        required=True,
+        help="End date in YYYY-MM-DD or ISO-8601 UTC (e.g. 2026-01-07).",
+    )
+    fetch_net_parser.add_argument(
+        "--output-dir",
+        default="./data/raw/coin_metrics",
+        help=(
+            "Directory where raw gzip JSON envelopes will be saved "
+            "(default: ./data/raw/coin_metrics)."
+        ),
+    )
+    fetch_net_parser.add_argument(
+        "--db-path",
+        default=None,
+        help=(
+            "Path to DuckDB database file for run locking "
+            "(default: <output-dir>/../../state/platform.duckdb)."
+        ),
+    )
+
+    # 10. promote-network command
+    promote_net_parser = subparsers.add_parser(
+        "promote-network",
+        help="Promote raw on-chain network envelopes to curated Parquet and DuckDB views.",
+        description=(
+            "Promote raw on-chain network envelopes to curated Parquet partitions, "
+            "refresh fact_network_metrics_daily & mart_btc_market_and_network_daily views, "
+            "and record coin_metrics_daily watermark."
+        ),
+    )
+    promote_net_parser.add_argument(
+        "--raw-dir",
+        default="./data/raw/coin_metrics",
+        help=(
+            "Directory containing raw gzip JSON network envelopes "
+            "(default: ./data/raw/coin_metrics)."
+        ),
+    )
+    promote_net_parser.add_argument(
+        "--curated-dir",
+        default="./data/curated",
+        help="Directory for curated Parquet partitions (default: ./data/curated).",
+    )
+    promote_net_parser.add_argument(
+        "--db-path",
+        default="./data/state/platform.duckdb",
+        help="Path to DuckDB database file (default: ./data/state/platform.duckdb).",
+    )
+
     return parser
 
 
@@ -363,6 +461,7 @@ def main(
     *,
     clock: Callable[[], datetime] | None = None,
     client: CoinbaseClient | None = None,
+    network_client: CoinMetricsClient | None = None,
 ) -> int:
     parser = build_parser()
     if argv is None:
@@ -1173,6 +1272,292 @@ def main(
             "db_path": str(db_path),
         }
         sys.stdout.write(json.dumps(summary, indent=2) + "\n")
+        return 0
+
+    if args.command == "fetch-network":
+        try:
+            now_utc = _resolve_clock(clock)
+            start_dt = _parse_cli_date(args.start, "--start")
+            end_dt = _parse_cli_date(args.end, "--end")
+            if start_dt > end_dt:
+                sys.stderr.write(
+                    f"error: --start ({args.start}) must not be after --end ({args.end})\n"
+                )
+                return 2
+        except (TimeRangeError, ValueError) as exc:
+            sys.stderr.write(f"error: {exc}\n")
+            return 2
+
+        start_str = start_dt.strftime("%Y-%m-%d")
+        end_str = end_dt.strftime("%Y-%m-%d")
+
+        run_id = str(uuid.uuid4())
+        output_dir = Path(args.output_dir)
+        db_path = (
+            Path(args.db_path) if args.db_path is not None else Path("./data/state/platform.duckdb")
+        )
+        db_manager = DuckDBManager(db_path=db_path, curated_dir=db_path.parent)
+        db_manager.initialize()
+
+        if not db_manager.acquire_lock(
+            run_id=run_id,
+            mode="fetch_network",
+            started_at_utc=now_utc,
+            requested_start_utc=start_dt,
+            requested_end_utc=end_dt,
+        ):
+            _log_event("error", "concurrent_run_detected", run_id=run_id)
+            sys.stderr.write("error: concurrent run detected\n")
+            return 6
+
+        cm_client = network_client if network_client is not None else CoinMetricsClient()
+        owns_client = network_client is None
+
+        _log_event(
+            "info",
+            "fetch_network_started",
+            run_id=run_id,
+            start=start_str,
+            end=end_str,
+            output_dir=str(output_dir),
+        )
+
+        exit_code = 0
+        net_error_msg: str | None = None
+        records_ingested = 0
+        net_files_written: list[str] = []
+        cm_response = None
+
+        try:
+            try:
+                cm_response = cm_client.fetch_asset_metrics(
+                    start_time=start_str,
+                    end_time=end_str,
+                )
+            except CoinMetricsSourceUnavailableError as exc:
+                net_error_msg = f"Coin Metrics source unavailable: {exc}"
+                _log_event("error", "source_unavailable", run_id=run_id, error=str(exc))
+                exit_code = 3
+            except CoinMetricsHTTPError as exc:
+                net_error_msg = f"Coin Metrics HTTP error: {exc}"
+                _log_event("error", "coin_metrics_http_error", run_id=run_id, error=str(exc))
+                exit_code = 3
+            except CoinMetricsClientError as exc:
+                net_error_msg = f"Coin Metrics client error: {exc}"
+                _log_event("error", "coin_metrics_error", run_id=run_id, error=str(exc))
+                exit_code = 3
+            except CoinMetricsContractViolationError as exc:
+                net_error_msg = f"Contract violation: {exc}"
+                _log_event("error", "contract_violation", run_id=run_id, error=str(exc))
+                exit_code = 4
+
+            if exit_code == 0 and cm_response is not None:
+                cm_validation = validate_coin_metrics_payload(cm_response.raw_payload)
+                if not cm_validation.is_valid:
+                    net_error_msg = f"Contract violation: {'; '.join(cm_validation.violations)}"
+                    _log_event(
+                        "error",
+                        "contract_violation",
+                        run_id=run_id,
+                        violations=cm_validation.violations,
+                    )
+                    exit_code = 4
+                else:
+                    try:
+                        envelope = create_network_raw_envelope(
+                            run_id=run_id,
+                            asset="btc",
+                            metrics="TxCnt,AdrActCnt",
+                            frequency="1d",
+                            start_time=start_str,
+                            end_time=end_str,
+                            retrieved_at_utc=cm_response.retrieved_at_utc,
+                            http_status=cm_response.http_status,
+                            payload=cm_response.raw_payload,
+                            provider_request_id=cm_response.provider_request_id,
+                        )
+                        file_path = write_network_raw_envelope(output_dir, envelope)
+                        net_files_written.append(str(file_path))
+                        records_ingested = len(cm_validation.valid_records)
+                        _log_event(
+                            "info",
+                            "network_persisted",
+                            run_id=run_id,
+                            path=str(file_path),
+                            records=records_ingested,
+                        )
+                    except Exception as exc:
+                        net_error_msg = f"Storage failure: {exc}"
+                        _log_event("error", "storage_failure", run_id=run_id, error=str(exc))
+                        exit_code = 5
+        finally:
+            if owns_client:
+                cm_client.close()
+            status_str = "SUCCEEDED" if exit_code == 0 else "FAILED"
+            completed_t = _resolve_clock(clock)
+            db_manager.release_lock(
+                run_id=run_id,
+                status=status_str,
+                completed_at_utc=completed_t,
+                error_message=net_error_msg,
+            )
+
+        fetch_summary: dict[str, Any] = {
+            "run_id": run_id,
+            "status": "success" if exit_code == 0 else "failure",
+            "requested_start": start_str,
+            "requested_end": end_str,
+            "records_ingested": records_ingested,
+            "output_dir": str(output_dir),
+            "files_written": net_files_written,
+        }
+        sys.stdout.write(json.dumps(fetch_summary, indent=2) + "\n")
+        if net_error_msg is not None:
+            sys.stderr.write(f"error: {net_error_msg}\n")
+        return exit_code
+
+    if args.command == "promote-network":
+        now_utc = _resolve_clock(clock)
+        run_id = str(uuid.uuid4())
+        raw_dir = Path(args.raw_dir)
+        curated_dir = Path(args.curated_dir)
+        db_path = Path(args.db_path)
+
+        db_manager = DuckDBManager(db_path=db_path, curated_dir=curated_dir)
+        db_manager.initialize()
+
+        if not db_manager.acquire_lock(
+            run_id=run_id, mode="promote_network", started_at_utc=now_utc
+        ):
+            _log_event("error", "concurrent_run_detected", run_id=run_id)
+            sys.stderr.write("error: concurrent run detected\n")
+            return 6
+
+        _log_event(
+            "info",
+            "promote_network_started",
+            run_id=run_id,
+            raw_dir=str(raw_dir),
+            curated_dir=str(curated_dir),
+            db_path=str(db_path),
+        )
+
+        try:
+            net_envelopes = read_network_raw_envelopes(raw_dir)
+        except Exception as exc:
+            db_manager.release_lock(
+                run_id=run_id,
+                status="FAILED",
+                completed_at_utc=_resolve_clock(clock),
+                error_message=str(exc),
+            )
+            _log_event("error", "raw_read_failed", run_id=run_id, error=str(exc))
+            sys.stderr.write(f"error: failed to read raw network envelopes: {exc}\n")
+            return 2
+
+        if not net_envelopes:
+            db_manager.release_lock(
+                run_id=run_id,
+                status="SUCCEEDED",
+                completed_at_utc=_resolve_clock(clock),
+            )
+            sys.stderr.write(f"No raw network envelopes found in {raw_dir}\n")
+            empty_summary: dict[str, Any] = {
+                "run_id": run_id,
+                "status": "success",
+                "raw_envelopes_read": 0,
+                "rows_promoted": 0,
+                "partitions_written": 0,
+                "curated_dir": str(curated_dir),
+                "db_path": str(db_path),
+            }
+            sys.stdout.write(json.dumps(empty_summary, indent=2) + "\n")
+            return 0
+
+        try:
+            net_metrics = normalize_network_envelopes(net_envelopes, now_utc=now_utc)
+        except CoinMetricsContractViolationError as exc:
+            db_manager.release_lock(
+                run_id=run_id,
+                status="FAILED",
+                completed_at_utc=_resolve_clock(clock),
+                error_message=str(exc),
+            )
+            _log_event("error", "quality_failure", run_id=run_id, error=str(exc))
+            sys.stderr.write(f"error: network metric contract violation: {exc}\n")
+            return 4
+        except Exception as exc:
+            db_manager.release_lock(
+                run_id=run_id,
+                status="FAILED",
+                completed_at_utc=_resolve_clock(clock),
+                error_message=str(exc),
+            )
+            _log_event("error", "normalization_failure", run_id=run_id, error=str(exc))
+            sys.stderr.write(f"error: network normalization failure: {exc}\n")
+            return 4
+
+        try:
+            net_partitions = write_network_parquet_partitions(net_metrics, curated_dir=curated_dir)
+        except NetworkParquetStorageError as exc:
+            db_manager.release_lock(
+                run_id=run_id,
+                status="FAILED",
+                completed_at_utc=_resolve_clock(clock),
+                error_message=str(exc),
+            )
+            _log_event("error", "parquet_write_failed", run_id=run_id, error=str(exc))
+            sys.stderr.write(f"error: failed writing network Parquet: {exc}\n")
+            return 5
+
+        # Update views
+        db_manager.create_network_fact_view()
+        db_manager.create_cross_domain_mart_view()
+
+        # Watermark update for coin_metrics_daily
+        max_date = max((m.metric_date_utc for m in net_metrics), default=None)
+        old_wm = db_manager.get_watermark(pipeline_id="coin_metrics_daily")
+        new_wm = old_wm
+        if max_date is not None:
+            db_manager.set_watermark(
+                watermark_utc=max_date,
+                run_id=run_id,
+                pipeline_id="coin_metrics_daily",
+                now_utc=now_utc,
+            )
+            new_wm = max_date
+
+        completed_t = _resolve_clock(clock)
+        db_manager.record_run(
+            run_id=run_id,
+            mode="promote_network",
+            started_at_utc=now_utc,
+            completed_at_utc=completed_t,
+            status="SUCCEEDED",
+            rows_promoted=len(net_metrics),
+            partitions_written=len(net_partitions),
+            raw_envelopes_read=len(net_envelopes),
+            old_watermark_utc=old_wm,
+            new_watermark_utc=new_wm,
+        )
+
+        db_manager.release_lock(
+            run_id=run_id,
+            status="SUCCEEDED",
+            completed_at_utc=completed_t,
+        )
+
+        promote_summary: dict[str, Any] = {
+            "run_id": run_id,
+            "status": "success",
+            "raw_envelopes_read": len(net_envelopes),
+            "rows_promoted": len(net_metrics),
+            "partitions_written": len(net_partitions),
+            "watermark_utc": format_canonical_utc(new_wm) if new_wm else None,
+            "curated_dir": str(curated_dir),
+            "db_path": str(db_path),
+        }
+        sys.stdout.write(json.dumps(promote_summary, indent=2) + "\n")
         return 0
 
     if args.command == "query":

@@ -65,3 +65,11 @@ This log is intentionally lightweight. Promote a decision to a numbered ADR when
 - **Alternatives:** AI-directed pipeline control or autonomous remediation.
 - **Trade-offs:** Less automation spectacle; more trustworthy operations.
 - **Reconsider when:** Evaluation proves a narrow workflow safe, useful, auditable, and reversible.
+
+## D-009 — Managed Native DuckDB SQL Views over dbt-core
+
+- **Decision:** Use native declarative SQL views in DuckDB rather than adopting dbt-core with dbt-duckdb.
+- **Reason:** Minimizes dependency footprint (avoids 45+ transitive dependencies), eliminates CLI invocation latency, and fits the current 4-model conformed DAG.
+- **Alternatives:** Full dbt-core adoption, lightweight Jinja2 template preprocessor.
+- **Trade-offs:** No automated interactive lineage graph generator; view dependencies managed explicitly in code.
+- **Reconsider when:** Model DAG grows beyond 15 interdependent models or migration to a distributed cloud data warehouse occurs. (See `D-009_DBT_EVALUATION.md` for full evaluation).
