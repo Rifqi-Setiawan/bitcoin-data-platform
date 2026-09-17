@@ -378,6 +378,56 @@ bitcoin-data query --db-path ./data/state/platform.duckdb \
   --sql "SELECT trade_date_utc, market_close_usd, market_volume_btc, transaction_count, active_addresses_count, tx_per_active_address FROM mart_btc_market_and_network_daily ORDER BY trade_date_utc DESC LIMIT 7;"
 ```
 
+## Phase 8: Research Serving Layer, Multi-Format Exporter & Query Catalog
+
+Phase 8 establishes an ergonomic, decoupled research serving layer designed for reproducible quantitative analysis and downstream research consumption:
+
+- **Parameterized Query Service (`serving/query_service.py`)**:
+  - Secure parameterized SQL execution supporting named parameter bindings (`:start_date`, `:end_date`, `:asset`) translated safely to native DuckDB bindings.
+  - Parameter validation and injection defense preserving PostgreSQL/DuckDB type casts (`::TYPE`).
+  - Query file loader supporting version-controlled analytical models.
+- **Multi-Format Analytical Exporter (`serving/exporter.py`)**:
+  - Serializes PyArrow tables into `parquet` (Snappy compression), `arrow` (IPC stream), `csv` (RFC 4180), and `json` formats.
+  - Atomic filesystem write operations (`.tmp` write followed by `os.replace`) with failure cleanup.
+  - In-memory serialization returning byte payloads for headless execution and programmatic consumption.
+- **Version-Controlled Query Catalog (`queries/`)**:
+  - `queries/daily_market_summary.sql`: Daily BTC-USD OHLCV summary, inter-day return, and intraday high-low volatility spread.
+  - `queries/onchain_network_activity.sql`: On-chain transaction counts, active address metrics, network velocity ratios, and day-over-day deltas.
+  - `queries/cross_domain_market_network.sql`: Parameterized cross-domain query joining market price action and network throughput with completeness filtering.
+- **Official Data Dictionary (`docs/data_dictionary/DATA_DICTIONARY.md`)**:
+  - Formal documentation of granularities, primary keys, nullability, data types, and semantic definitions for `fact_market_candle_hourly`, `mart_btc_usd_daily`, `fact_network_metrics_daily`, and `mart_btc_market_and_network_daily`.
+- **Reproducible Research Notebooks (`notebooks/`)**:
+  - `notebooks/README.md`: Step-by-step clean-room research setup guide.
+  - `notebooks/bitcoin_research_baseline.ipynb`: Valid Jupyter notebook analyzing market vs. on-chain interactions with zero embedded ETL code or hardcoded credentials.
+
+### Query CLI with Multi-Format Export
+
+Execute parameterized queries and export to diverse formats:
+
+```bash
+# Export parameterized cross-domain query to Parquet
+bitcoin-data query \
+  --db-path ./data/state/platform.duckdb \
+  --file queries/cross_domain_market_network.sql \
+  --param start_date=2026-01-01T00:00:00Z \
+  --param end_date=2026-01-31T23:59:59Z \
+  --format parquet \
+  --output ./data/exports/cross_domain_jan2026.parquet
+
+# Query daily market summary and output CSV to stdout
+bitcoin-data query \
+  --db-path ./data/state/platform.duckdb \
+  --file queries/daily_market_summary.sql \
+  --format csv
+
+# Ad-hoc SQL query with Arrow IPC export
+bitcoin-data query \
+  --db-path ./data/state/platform.duckdb \
+  --sql "SELECT * FROM mart_btc_market_and_network_daily LIMIT 10;" \
+  --format arrow \
+  --output ./data/exports/sample.arrow
+```
+
 ## Quality gates
 
 Run the documented quality gates:
@@ -412,6 +462,8 @@ make clean-dist # remove build and packaging artifacts
 - [Phase 5 Specification](docs/specs/PHASE_5_OBSERVABILITY_DATA_QUALITY.md)
 - [Phase 6 Specification](docs/specs/PHASE_6_REPRODUCIBLE_DELIVERY_CICD.md)
 - [Phase 7 Specification](docs/specs/PHASE_7_SECOND_DOMAIN_CONFORMED_MODELING.md)
+- [Phase 8 Specification](docs/specs/PHASE_8_RESEARCH_SERVING_LAYER.md)
+- [Official Data Dictionary](docs/data_dictionary/DATA_DICTIONARY.md)
 - [ADR D-008: Container Evaluation](docs/decisions/D-008_CONTAINER_EVALUATION.md)
 - [ADR D-009: dbt-core Evaluation](docs/decisions/D-009_DBT_EVALUATION.md)
 - [Operational Runbook (Phase 3)](docs/runbooks/OPERATIONAL_RUNBOOK.md)

@@ -15,6 +15,11 @@ from typing import Any
 from bitcoin_data_platform.infra import dispatch_failure_alert
 from bitcoin_data_platform.quality import run_dataset_quality_checks
 from bitcoin_data_platform.quality.checks import QualityCheckError
+from bitcoin_data_platform.serving import (
+    execute_parameterized_query,
+    export_arrow_table,
+    load_query_file,
+)
 from bitcoin_data_platform.sources.coin_metrics_client import (
     CoinMetricsClient,
     CoinMetricsClientError,
@@ -551,13 +556,38 @@ def build_parser() -> argparse.ArgumentParser:
     query_parser = subparsers.add_parser(
         "query",
         parents=[base_db_parser],
-        help="Execute SQL query against DuckDB database and print JSON results.",
-        description="Execute SQL query against DuckDB database and print JSON results.",
+        help="Execute SQL query against DuckDB database and export results.",
+        description=(
+            "Execute SQL query against DuckDB database and export results in multiple formats."
+        ),
+    )
+    query_source_group = query_parser.add_mutually_exclusive_group(required=True)
+    query_source_group.add_argument(
+        "--sql",
+        help="SQL query string to execute.",
+    )
+    query_source_group.add_argument(
+        "--file",
+        type=Path,
+        help="Path to SQL query file to execute.",
     )
     query_parser.add_argument(
-        "--sql",
-        required=True,
-        help="SQL query to execute.",
+        "--param",
+        action="append",
+        default=[],
+        help="Query parameter in KEY=VALUE format (can be specified multiple times).",
+    )
+    query_parser.add_argument(
+        "--format",
+        choices=["json", "csv", "parquet", "arrow"],
+        default="json",
+        help="Export format (choices: json, csv, parquet, arrow; default: json).",
+    )
+    query_parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output file path for exported data.",
     )
 
     # 5. incremental command
@@ -1351,11 +1381,45 @@ def main(
             sys.stderr.write(f"error: database file not found at {db_path}\n")
             return 2
 
+        if args.file:
+            query_file = Path(args.file)
+            if not query_file.exists():
+                sys.stderr.write(f"error: query file not found at {query_file}\n")
+                return 2
+            try:
+                sql = load_query_file(query_file)
+            except Exception as exc:
+                sys.stderr.write(f"error: failed to read query file: {exc}\n")
+                return 2
+        else:
+            sql = args.sql
+
+        params: dict[str, Any] = {}
+        for p in args.param or []:
+            if "=" not in p:
+                sys.stderr.write(f"error: invalid param format '{p}', expected KEY=VALUE\n")
+                return 2
+            k, v = p.split("=", 1)
+            params[k.strip()] = v.strip()
+
         db_manager = DuckDBManager(db_path=db_path, curated_dir=db_path.parent)
         try:
             with db_manager:
-                results = db_manager.execute_query(args.sql)
-                sys.stdout.write(json.dumps(results, default=str, indent=2) + "\n")
+                table = execute_parameterized_query(db_manager, sql, params if params else None)
+                if args.output:
+                    export_arrow_table(table, fmt=args.format, output_path=args.output)
+                    return 0
+
+                data = export_arrow_table(table, fmt=args.format)
+                if isinstance(data, Path):
+                    return 0
+                if args.format in ("json", "csv"):
+                    text = data.decode("utf-8")
+                    if not text.endswith("\n"):
+                        text += "\n"
+                    sys.stdout.write(text)
+                else:
+                    sys.stdout.buffer.write(data)
                 return 0
         except DuckDBManagerError as exc:
             sys.stderr.write(f"error: {exc}\n")
