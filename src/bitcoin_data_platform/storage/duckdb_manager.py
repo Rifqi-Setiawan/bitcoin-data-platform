@@ -87,26 +87,6 @@ class DuckDBManager:
         """
         con.execute(sql)
 
-        # Handle schema migration for existing databases missing columns
-        existing_cols = {
-            row[1] for row in con.execute("PRAGMA table_info('run_metadata');").fetchall()
-        }
-        migration_cols = [
-            ("requested_start_utc", "TIMESTAMPTZ"),
-            ("requested_end_utc", "TIMESTAMPTZ"),
-            ("old_watermark_utc", "TIMESTAMPTZ"),
-            ("new_watermark_utc", "TIMESTAMPTZ"),
-            ("code_version", "VARCHAR"),
-            ("source_row_count", "INTEGER"),
-            ("valid_row_count", "INTEGER"),
-            ("gap_count", "INTEGER"),
-            ("raw_checksums", "VARCHAR"),
-            ("error_class", "VARCHAR"),
-        ]
-        for col_name, col_type in migration_cols:
-            if col_name not in existing_cols:
-                con.execute(f"ALTER TABLE run_metadata ADD COLUMN {col_name} {col_type};")
-
     def create_quality_checks_table(self) -> None:
         """Create quality_check_results table if not exists."""
         con = self.get_connection()
@@ -141,37 +121,23 @@ class DuckDBManager:
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         for c in checks:
-            check_id = str(getattr(c, "check_id", uuid.uuid4()))
-            run_id = str(getattr(c, "run_id", ""))
-            rule_name = str(getattr(c, "rule_name", ""))
-            severity = str(getattr(c, "severity", "INFO"))
-            status = str(getattr(c, "status", "PASSED"))
-            metric_val = getattr(c, "metric_value", None)
-            if metric_val is not None:
-                metric_val = float(metric_val)
-            thresh_val = getattr(c, "threshold_value", None)
-            if thresh_val is not None:
-                thresh_val = float(thresh_val)
-            details = getattr(c, "details", None)
-            if details is not None:
-                details = str(details)
-            eval_time = getattr(c, "evaluated_at_utc", None)
-            if eval_time is None:
-                eval_time = datetime.now(UTC)
-            elif eval_time.tzinfo is None:
+            eval_time = getattr(c, "evaluated_at_utc", None) or datetime.now(UTC)
+            if eval_time.tzinfo is None:
                 eval_time = eval_time.replace(tzinfo=UTC)
-
+            mv = getattr(c, "metric_value", None)
+            tv = getattr(c, "threshold_value", None)
+            dt = getattr(c, "details", None)
             con.execute(
                 sql,
                 [
-                    check_id,
-                    run_id,
-                    rule_name,
-                    severity,
-                    status,
-                    metric_val,
-                    thresh_val,
-                    details,
+                    str(getattr(c, "check_id", uuid.uuid4())),
+                    str(getattr(c, "run_id", "")),
+                    str(getattr(c, "rule_name", "")),
+                    str(getattr(c, "severity", "INFO")),
+                    str(getattr(c, "status", "PASSED")),
+                    float(mv) if mv is not None else None,
+                    float(tv) if tv is not None else None,
+                    str(dt) if dt is not None else None,
                     eval_time,
                 ],
             )
@@ -702,53 +668,31 @@ class DuckDBManager:
             "rows_promoted": row[4] if row[4] is not None else 0,
         }
 
-    def get_last_success(self) -> dict[str, Any] | None:
-        """Get metadata for latest successful pipeline run."""
+    def _get_run_by_status(self, statuses: tuple[str, ...]) -> dict[str, Any] | None:
         con = self.get_connection()
         self.create_metadata_table()
+        placeholders = ", ".join(f"'{s}'" for s in statuses)
         cursor = con.execute(
-            """
+            f"""
             SELECT
                 run_id,
                 STRFTIME(completed_at_utc, '%Y-%m-%dT%H:%M:%SZ') AS comp_str
             FROM run_metadata
-            WHERE UPPER(status) IN ('SUCCEEDED', 'SUCCESS')
+            WHERE UPPER(status) IN ({placeholders})
             ORDER BY completed_at_utc DESC, started_at_utc DESC
             LIMIT 1;
             """
         )
         row = cursor.fetchone()
-        if row is None:
-            return None
+        return {"run_id": row[0], "completed_at_utc": row[1]} if row else None
 
-        return {
-            "run_id": row[0],
-            "completed_at_utc": row[1],
-        }
+    def get_last_success(self) -> dict[str, Any] | None:
+        """Get metadata for latest successful pipeline run."""
+        return self._get_run_by_status(("SUCCEEDED", "SUCCESS"))
 
     def get_last_failure(self) -> dict[str, Any] | None:
         """Get metadata for latest failed pipeline run."""
-        con = self.get_connection()
-        self.create_metadata_table()
-        cursor = con.execute(
-            """
-            SELECT
-                run_id,
-                STRFTIME(completed_at_utc, '%Y-%m-%dT%H:%M:%SZ') AS comp_str
-            FROM run_metadata
-            WHERE UPPER(status) IN ('FAILED', 'FAILURE')
-            ORDER BY completed_at_utc DESC, started_at_utc DESC
-            LIMIT 1;
-            """
-        )
-        row = cursor.fetchone()
-        if row is None:
-            return None
-
-        return {
-            "run_id": row[0],
-            "completed_at_utc": row[1],
-        }
+        return self._get_run_by_status(("FAILED", "FAILURE"))
 
     def get_curated_stats(self) -> dict[str, Any]:
         """Get summary statistics of curated Parquet data and disk usage."""

@@ -1,6 +1,5 @@
 """Coinbase Exchange HTTP client for BTC-USD hourly candle retrieval."""
 
-import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -13,6 +12,7 @@ from bitcoin_data_platform.sources.coinbase_contract import (
     CoinbaseCandle,
     validate_candle_payload,
 )
+from bitcoin_data_platform.sources.http_helpers import apply_rate_limit, compute_backoff_delay
 
 DEFAULT_USER_AGENT = (
     "bitcoin-data-platform/0.1.0 (+https://github.com/Rifqi-Setiawan/bitcoin-data-platform)"
@@ -129,30 +129,30 @@ class CoinbaseClient:
 
     def _apply_rate_limit(self) -> None:
         """Enforce minimum spacing between outbound requests."""
-        if self._last_request_started_at is not None:
-            elapsed = self._clock() - self._last_request_started_at
-            if elapsed < self.min_request_interval_seconds:
-                sleep_duration = self.min_request_interval_seconds - elapsed
-                self._sleeper(sleep_duration)
-        self._last_request_started_at = self._clock()
+        self._last_request_started_at = apply_rate_limit(
+            self._last_request_started_at,
+            self.min_request_interval_seconds,
+            self._clock,
+            self._sleeper,
+        )
 
     def _compute_backoff_delay(self, attempt: int, response: httpx.Response | None) -> float:
         """Calculate backoff duration, respecting Retry-After when present."""
-        if response is not None:
-            retry_after = response.headers.get("Retry-After")
-            if retry_after:
-                try:
-                    delay = float(retry_after.strip())
-                    if delay >= 0:
-                        return delay
-                except ValueError:
-                    pass
+        return compute_backoff_delay(
+            attempt,
+            response,
+            self.base_backoff_seconds,
+            self.max_backoff_seconds,
+            self.jitter,
+        )
 
-        # Exponential backoff: min(base * 2^attempt + jitter, max_backoff)
-        backoff = self.base_backoff_seconds * (2**attempt)
-        if self.jitter:
-            backoff += random.uniform(0.0, 0.5)
-        return float(min(backoff, self.max_backoff_seconds))
+    def _sleep_backoff(self, attempt: int, response: httpx.Response | None = None) -> None:
+        delay = max(
+            self._compute_backoff_delay(attempt, response),
+            self.min_request_interval_seconds,
+        )
+        self._sleeper(delay)
+        self._last_request_started_at = self._clock()
 
     def fetch_candles(
         self,
@@ -194,12 +194,7 @@ class CoinbaseClient:
             except (httpx.RequestError, ConnectionError, TimeoutError) as exc:
                 last_error_message = f"Network failure ({type(exc).__name__}): {exc}"
                 if attempt < self.max_retries - 1:
-                    delay = max(
-                        self._compute_backoff_delay(attempt, None),
-                        self.min_request_interval_seconds,
-                    )
-                    self._sleeper(delay)
-                    self._last_request_started_at = self._clock()
+                    self._sleep_backoff(attempt)
                     continue
                 break
 
@@ -211,12 +206,7 @@ class CoinbaseClient:
                 except Exception as exc:
                     last_error_message = f"Invalid JSON response: {exc}"
                     if attempt < self.max_retries - 1:
-                        delay = max(
-                            self._compute_backoff_delay(attempt, response),
-                            self.min_request_interval_seconds,
-                        )
-                        self._sleeper(delay)
-                        self._last_request_started_at = self._clock()
+                        self._sleep_backoff(attempt, response)
                         continue
                     break
 
@@ -240,12 +230,7 @@ class CoinbaseClient:
                 body_snippet = response.text[:200]
                 last_error_message = f"HTTP {status} {reason}: {body_snippet}"
                 if attempt < self.max_retries - 1:
-                    delay = max(
-                        self._compute_backoff_delay(attempt, response),
-                        self.min_request_interval_seconds,
-                    )
-                    self._sleeper(delay)
-                    self._last_request_started_at = self._clock()
+                    self._sleep_backoff(attempt, response)
                     continue
                 break
 

@@ -1,7 +1,6 @@
 """Data quality assertions and contract checks."""
 
 from bitcoin_data_platform.quality.checks import (
-    CandleLike,
     QualityCheckError,
     check_candle,
     filter_valid_candles,
@@ -17,7 +16,6 @@ from bitcoin_data_platform.quality.dataset_checks import (
 )
 
 __all__ = [
-    "CandleLike",
     "QualityCheckError",
     "QualityCheckRecord",
     "check_boundary_reconciliation",

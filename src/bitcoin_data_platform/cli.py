@@ -6,7 +6,8 @@ import json
 import os
 import sys
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -60,7 +61,11 @@ from bitcoin_data_platform.transforms.network_normalizer import (
 )
 from bitcoin_data_platform.transforms.normalizer import normalize_envelopes
 from bitcoin_data_platform.transforms.raw_reader import read_raw_envelopes
-from bitcoin_data_platform.window_planner import WindowPlanningError, plan_backfill
+from bitcoin_data_platform.window_planner import (
+    PlannedWindow,
+    WindowPlanningError,
+    plan_backfill,
+)
 
 
 def _parse_cli_date(val: str, field_name: str) -> datetime:
@@ -174,6 +179,282 @@ def _format_status_text(data: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+@dataclass
+class RunLockContext:
+    """Context holding active pipeline run state for automatic lock management."""
+
+    db_manager: DuckDBManager
+    run_id: str
+    clock: Callable[[], datetime] | None = None
+    status: str = "SUCCEEDED"
+    rows_promoted: int = 0
+    partitions_written: int = 0
+    raw_envelopes_read: int = 0
+    old_watermark_utc: datetime | None = None
+    new_watermark_utc: datetime | None = None
+    error_message: str | None = None
+    released: bool = False
+
+    def release(
+        self,
+        *,
+        status: str | None = None,
+        error_message: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if self.released:
+            return
+        if status is not None:
+            self.status = status
+        if error_message is not None:
+            self.error_message = error_message
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+        self.db_manager.release_lock(
+            run_id=self.run_id,
+            status=self.status,
+            completed_at_utc=_resolve_clock(self.clock),
+            rows_promoted=self.rows_promoted,
+            partitions_written=self.partitions_written,
+            raw_envelopes_read=self.raw_envelopes_read,
+            old_watermark_utc=self.old_watermark_utc,
+            new_watermark_utc=self.new_watermark_utc,
+            error_message=self.error_message,
+        )
+        self.released = True
+
+
+@contextlib.contextmanager
+def _managed_run_lock(
+    db_manager: DuckDBManager,
+    run_id: str,
+    mode: str,
+    started_at_utc: datetime,
+    *,
+    clock: Callable[[], datetime] | None = None,
+    requested_start_utc: datetime | None = None,
+    requested_end_utc: datetime | None = None,
+    old_watermark_utc: datetime | None = None,
+) -> Iterator[RunLockContext | None]:
+    """Context manager acquiring run lock on enter and reliably releasing on exit."""
+    if not db_manager.acquire_lock(
+        run_id=run_id,
+        mode=mode,
+        started_at_utc=started_at_utc,
+        requested_start_utc=requested_start_utc,
+        requested_end_utc=requested_end_utc,
+        old_watermark_utc=old_watermark_utc,
+    ):
+        _log_event("error", "concurrent_run_detected", run_id=run_id)
+        sys.stderr.write("error: concurrent run detected\n")
+        yield None
+        return
+
+    ctx = RunLockContext(
+        db_manager=db_manager,
+        run_id=run_id,
+        clock=clock,
+        old_watermark_utc=old_watermark_utc,
+    )
+    try:
+        yield ctx
+    except Exception as exc:
+        ctx.status = "FAILED"
+        ctx.error_message = str(exc)
+        raise
+    finally:
+        ctx.release()
+
+
+def _ingest_windows(
+    cb_client: CoinbaseClient,
+    windows: Sequence[PlannedWindow],
+    run_id: str,
+    output_dir: Path,
+) -> tuple[int, int, int, int, list[str], str | None]:
+    """Ingest candle windows sequentially, writing raw envelopes.
+
+    Returns:
+        (exit_code, windows_succeeded, windows_failed, candles_ingested, files_written, error_msg)
+    """
+    windows_succeeded = 0
+    windows_failed = 0
+    candles_ingested = 0
+    files_written: list[str] = []
+    exit_code = 0
+    error_msg: str | None = None
+
+    for window in windows:
+        _log_event(
+            "info",
+            "window_started",
+            run_id=run_id,
+            window_index=window.index,
+            start_utc=format_canonical_utc(window.start_utc),
+            end_utc=format_canonical_utc(window.end_utc),
+        )
+        try:
+            response = cb_client.fetch_candles(window.start_utc, window.end_utc)
+        except (SourceUnavailableError, CoinbaseClientError) as exc:
+            windows_failed += 1
+            is_unavailable = isinstance(exc, SourceUnavailableError)
+            prefix = "Coinbase source unavailable" if is_unavailable else "Coinbase client error"
+            event = "source_unavailable" if is_unavailable else "coinbase_error"
+            error_msg = f"{prefix}: {exc}"
+            _log_event("error", event, run_id=run_id, window_index=window.index, error=str(exc))
+            exit_code = 3
+            break
+
+        validation = validate_candle_payload(response.raw_payload)
+        if not validation.is_valid:
+            windows_failed += 1
+            error_msg = f"Contract violation: {'; '.join(validation.violations)}"
+            _log_event(
+                "error",
+                "contract_violation",
+                run_id=run_id,
+                window_index=window.index,
+                violations=validation.violations,
+            )
+            exit_code = 4
+            break
+
+        try:
+            envelope = create_raw_envelope(
+                run_id=run_id,
+                product_id="BTC-USD",
+                granularity_seconds=3600,
+                start_utc=window.start_utc,
+                end_utc=window.end_utc,
+                retrieved_at_utc=response.retrieved_at_utc,
+                http_status=response.http_status,
+                payload=response.raw_payload,
+                provider_request_id=response.provider_request_id,
+            )
+            file_path = write_raw_envelope(output_dir, envelope)
+            files_written.append(str(file_path))
+            windows_succeeded += 1
+            candles_ingested += len(validation.valid_candles)
+            _log_event(
+                "info",
+                "window_persisted",
+                run_id=run_id,
+                window_index=window.index,
+                path=str(file_path),
+                candles=len(validation.valid_candles),
+            )
+        except (StorageError, OSError) as exc:
+            windows_failed += 1
+            error_msg = f"Storage failure: {exc}"
+            _log_event(
+                "error", "storage_failure", run_id=run_id, window_index=window.index, error=str(exc)
+            )
+            exit_code = 5
+            break
+
+    return (
+        exit_code,
+        windows_succeeded,
+        windows_failed,
+        candles_ingested,
+        files_written,
+        error_msg,
+    )
+
+
+def _promote_market_data(
+    raw_dir: Path,
+    curated_dir: Path,
+    db_manager: DuckDBManager,
+    run_id: str,
+    now_utc: datetime,
+    *,
+    clock: Callable[[], datetime] | None = None,
+    update_watermark: bool = True,
+    clear_existing: bool = False,
+) -> tuple[int, str | None, int, int, int]:
+    """Promote raw envelopes to curated Parquet partitions and refresh DuckDB views.
+
+    Returns:
+        (exit_code, error_msg, envelopes_count, rows_promoted, partitions_count)
+    """
+    try:
+        envelopes = read_raw_envelopes(raw_dir)
+    except Exception as exc:
+        _log_event("error", "raw_read_failed", run_id=run_id, error=str(exc))
+        sys.stderr.write(f"error: failed to read raw envelopes: {exc}\n")
+        return 2, str(exc), 0, 0, 0
+
+    if not envelopes:
+        return 0, None, 0, 0, 0
+
+    try:
+        candles = normalize_envelopes(envelopes, now_utc=now_utc)
+    except QualityCheckError as exc:
+        _log_event("error", "quality_failure", run_id=run_id, error=str(exc))
+        sys.stderr.write(f"error: quality failure: {exc}\n")
+        return 4, str(exc), len(envelopes), 0, 0
+    except Exception as exc:
+        _log_event("error", "normalization_failure", run_id=run_id, error=str(exc))
+        sys.stderr.write(f"error: normalization failure: {exc}\n")
+        return 4, str(exc), len(envelopes), 0, 0
+
+    req_start = min((e.start_utc for e in envelopes), default=None)
+    req_end = max((e.end_utc for e in envelopes), default=None)
+    quality_records = run_dataset_quality_checks(
+        candles,
+        run_id=run_id,
+        requested_start=req_start,
+        requested_end=req_end,
+        evaluated_at_utc=now_utc,
+    )
+    try:
+        db_manager.record_quality_checks(quality_records)
+    except Exception as exc:
+        _log_event("warn", "quality_checks_persist_failed", error=str(exc))
+
+    blocking_failures = [
+        r for r in quality_records if r.severity == "BLOCK" and r.status == "FAILED"
+    ]
+    if blocking_failures:
+        failure_details = "; ".join(f"{r.rule_name}: {r.details}" for r in blocking_failures)
+        _log_event("error", "quality_check_blocked", run_id=run_id, details=failure_details)
+        sys.stderr.write(f"error: quality check violation: {failure_details}\n")
+        return 4, f"Dataset quality check violation: {failure_details}", len(envelopes), 0, 0
+
+    warn_failures = [r for r in quality_records if r.severity == "WARN" and r.status == "FAILED"]
+    if warn_failures:
+        warn_details = "; ".join(f"{r.rule_name}: {r.details}" for r in warn_failures)
+        _log_event("warn", "quality_check_warning", run_id=run_id, details=warn_details)
+
+    if clear_existing:
+        for p_file in curated_dir.glob("market/candles_hourly/source=*/year=*/*.parquet"):
+            with contextlib.suppress(OSError):
+                p_file.unlink()
+
+    try:
+        partitions = write_parquet_partitions(candles, curated_dir=curated_dir)
+    except (ParquetStorageError, OSError) as exc:
+        _log_event("error", "storage_failure", run_id=run_id, error=str(exc))
+        sys.stderr.write(f"error: storage failure: {exc}\n")
+        return 5, str(exc), len(envelopes), 0, 0
+
+    try:
+        db_manager.initialize()
+        completed_at_utc = _resolve_clock(clock)
+        if update_watermark and candles:
+            max_candle_ts = max(c.candle_start_utc for c in candles)
+            current_wm = db_manager.get_watermark()
+            if current_wm is None or max_candle_ts > current_wm:
+                db_manager.set_watermark(max_candle_ts, run_id=run_id, now_utc=completed_at_utc)
+    except Exception as exc:
+        _log_event("error", "database_failure", run_id=run_id, error=str(exc))
+        sys.stderr.write(f"error: database failure: {exc}\n")
+        return 5, str(exc), len(envelopes), len(candles), len(partitions)
+
+    return 0, None, len(envelopes), len(candles), len(partitions)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bitcoin-data",
@@ -183,6 +464,30 @@ def build_parser() -> argparse.ArgumentParser:
         dest="command",
         title="commands",
         metavar="<command>",
+    )
+
+    base_db_parser = argparse.ArgumentParser(add_help=False)
+    base_db_parser.add_argument(
+        "--db-path",
+        default="./data/state/platform.duckdb",
+        help="Path to DuckDB database file (default: ./data/state/platform.duckdb).",
+    )
+
+    base_storage_parser = argparse.ArgumentParser(add_help=False)
+    base_storage_parser.add_argument(
+        "--raw-dir",
+        default="./data/raw",
+        help="Directory containing raw gzip JSON envelopes (default: ./data/raw).",
+    )
+    base_storage_parser.add_argument(
+        "--curated-dir",
+        default="./data/curated",
+        help="Directory for curated Parquet partitions (default: ./data/curated).",
+    )
+    base_storage_parser.add_argument(
+        "--db-path",
+        default="./data/state/platform.duckdb",
+        help="Path to DuckDB database file (default: ./data/state/platform.duckdb).",
     )
 
     # 1. plan-backfill command
@@ -233,39 +538,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # 3. promote command
-    promote_parser = subparsers.add_parser(
+    subparsers.add_parser(
         "promote",
+        parents=[base_storage_parser],
         help="Promote raw envelopes to curated Parquet partitions and DuckDB analytical views.",
         description=(
             "Promote raw envelopes to curated Parquet partitions and DuckDB analytical views."
         ),
     )
-    promote_parser.add_argument(
-        "--raw-dir",
-        default="./data/raw",
-        help="Directory containing raw gzip JSON envelopes (default: ./data/raw).",
-    )
-    promote_parser.add_argument(
-        "--curated-dir",
-        default="./data/curated",
-        help="Directory for curated Parquet partitions (default: ./data/curated).",
-    )
-    promote_parser.add_argument(
-        "--db-path",
-        default="./data/state/platform.duckdb",
-        help="Path to DuckDB database file (default: ./data/state/platform.duckdb).",
-    )
 
     # 4. query command
     query_parser = subparsers.add_parser(
         "query",
+        parents=[base_db_parser],
         help="Execute SQL query against DuckDB database and print JSON results.",
         description="Execute SQL query against DuckDB database and print JSON results.",
-    )
-    query_parser.add_argument(
-        "--db-path",
-        default="./data/state/platform.duckdb",
-        help="Path to DuckDB database file (default: ./data/state/platform.duckdb).",
     )
     query_parser.add_argument(
         "--sql",
@@ -276,25 +563,11 @@ def build_parser() -> argparse.ArgumentParser:
     # 5. incremental command
     incremental_parser = subparsers.add_parser(
         "incremental",
+        parents=[base_storage_parser],
         help="Execute watermark-based incremental ingestion, promotion, and analytical update.",
         description=(
             "Execute watermark-based incremental ingestion, promotion, and analytical update."
         ),
-    )
-    incremental_parser.add_argument(
-        "--raw-dir",
-        default="./data/raw",
-        help="Directory containing raw gzip JSON envelopes (default: ./data/raw).",
-    )
-    incremental_parser.add_argument(
-        "--curated-dir",
-        default="./data/curated",
-        help="Directory for curated Parquet partitions (default: ./data/curated).",
-    )
-    incremental_parser.add_argument(
-        "--db-path",
-        default="./data/state/platform.duckdb",
-        help="Path to DuckDB database file (default: ./data/state/platform.duckdb).",
     )
     incremental_parser.add_argument(
         "--overlap-hours",
@@ -306,13 +579,9 @@ def build_parser() -> argparse.ArgumentParser:
     # 6. status command
     status_parser = subparsers.add_parser(
         "status",
+        parents=[base_db_parser],
         help="Inspect platform state, watermark freshness, run history, and data gaps.",
         description="Inspect platform state, watermark freshness, run history, and data gaps.",
-    )
-    status_parser.add_argument(
-        "--db-path",
-        default="./data/state/platform.duckdb",
-        help="Path to DuckDB database file (default: ./data/state/platform.duckdb).",
     )
     status_parser.add_argument(
         "--curated-dir",
@@ -335,26 +604,12 @@ def build_parser() -> argparse.ArgumentParser:
     # 7. repair command
     repair_parser = subparsers.add_parser(
         "repair",
+        parents=[base_storage_parser],
         help="Rebuild curated Parquet layer from scratch without altering watermark.",
         description=(
             "Rebuild curated Parquet layer from scratch from raw envelopes without "
             "altering watermark."
         ),
-    )
-    repair_parser.add_argument(
-        "--raw-dir",
-        default="./data/raw",
-        help="Directory containing raw gzip JSON envelopes (default: ./data/raw).",
-    )
-    repair_parser.add_argument(
-        "--curated-dir",
-        default="./data/curated",
-        help="Directory for curated Parquet partitions (default: ./data/curated).",
-    )
-    repair_parser.add_argument(
-        "--db-path",
-        default="./data/state/platform.duckdb",
-        help="Path to DuckDB database file (default: ./data/state/platform.duckdb).",
     )
     repair_parser.add_argument(
         "--force",
@@ -427,6 +682,7 @@ def build_parser() -> argparse.ArgumentParser:
     # 10. promote-network command
     promote_net_parser = subparsers.add_parser(
         "promote-network",
+        parents=[base_db_parser],
         help="Promote raw on-chain network envelopes to curated Parquet and DuckDB views.",
         description=(
             "Promote raw on-chain network envelopes to curated Parquet partitions, "
@@ -446,11 +702,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--curated-dir",
         default="./data/curated",
         help="Directory for curated Parquet partitions (default: ./data/curated).",
-    )
-    promote_net_parser.add_argument(
-        "--db-path",
-        default="./data/state/platform.duckdb",
-        help="Path to DuckDB database file (default: ./data/state/platform.duckdb).",
     )
 
     return parser
@@ -521,25 +772,6 @@ def main(
         db_manager = DuckDBManager(db_path=db_path, curated_dir=db_path.parent)
         db_manager.initialize()
 
-        if not db_manager.acquire_lock(
-            run_id=run_id,
-            mode="backfill",
-            started_at_utc=now_utc,
-            requested_start_utc=start_utc,
-            requested_end_utc=end_utc,
-        ):
-            _log_event("error", "concurrent_run_detected", run_id=run_id)
-            sys.stderr.write("error: concurrent run detected\n")
-            return 6
-
-        windows_succeeded = 0
-        windows_failed = 0
-        candles_ingested = 0
-        files_written: list[str] = []
-
-        cb_client = client if client is not None else CoinbaseClient()
-        owns_client = client is None
-
         _log_event(
             "info",
             "backfill_started",
@@ -548,126 +780,48 @@ def main(
             output_dir=str(output_dir),
         )
 
-        exit_code = 0
-        error_msg: str | None = None
+        with _managed_run_lock(
+            db_manager,
+            run_id,
+            "backfill",
+            now_utc,
+            clock=clock,
+            requested_start_utc=start_utc,
+            requested_end_utc=end_utc,
+        ) as lock_ctx:
+            if lock_ctx is None:
+                return 6
 
-        try:
-            for window in plan.windows:
-                _log_event(
-                    "info",
-                    "window_started",
-                    run_id=run_id,
-                    window_index=window.index,
-                    start_utc=format_canonical_utc(window.start_utc),
-                    end_utc=format_canonical_utc(window.end_utc),
+            cb_client = client if client is not None else CoinbaseClient()
+            owns_client = client is None
+            try:
+                exit_code, w_succ, w_fail, c_ing, files_w, err_msg = _ingest_windows(
+                    cb_client, plan.windows, run_id, output_dir
                 )
-                try:
-                    response = cb_client.fetch_candles(window.start_utc, window.end_utc)
-                except SourceUnavailableError as exc:
-                    windows_failed += 1
-                    error_msg = f"Coinbase source unavailable: {exc}"
-                    _log_event(
-                        "error",
-                        "source_unavailable",
-                        run_id=run_id,
-                        window_index=window.index,
-                        error=str(exc),
-                    )
-                    exit_code = 3
-                    break
-                except CoinbaseClientError as exc:
-                    windows_failed += 1
-                    error_msg = f"Coinbase client error: {exc}"
-                    _log_event(
-                        "error",
-                        "coinbase_error",
-                        run_id=run_id,
-                        window_index=window.index,
-                        error=str(exc),
-                    )
-                    exit_code = 3
-                    break
+            finally:
+                if owns_client:
+                    cb_client.close()
 
-                validation = validate_candle_payload(response.raw_payload)
-                if not validation.is_valid:
-                    windows_failed += 1
-                    error_msg = f"Contract violation: {'; '.join(validation.violations)}"
-                    _log_event(
-                        "error",
-                        "contract_violation",
-                        run_id=run_id,
-                        window_index=window.index,
-                        violations=validation.violations,
-                    )
-                    exit_code = 4
-                    break
+            if exit_code != 0:
+                lock_ctx.status = "FAILED"
+                lock_ctx.error_message = err_msg
 
-                try:
-                    envelope = create_raw_envelope(
-                        run_id=run_id,
-                        product_id="BTC-USD",
-                        granularity_seconds=3600,
-                        start_utc=window.start_utc,
-                        end_utc=window.end_utc,
-                        retrieved_at_utc=response.retrieved_at_utc,
-                        http_status=response.http_status,
-                        payload=response.raw_payload,
-                        provider_request_id=response.provider_request_id,
-                    )
-                    file_path = write_raw_envelope(output_dir, envelope)
-                    files_written.append(str(file_path))
-                    windows_succeeded += 1
-                    candles_ingested += len(validation.valid_candles)
-                    _log_event(
-                        "info",
-                        "window_persisted",
-                        run_id=run_id,
-                        window_index=window.index,
-                        path=str(file_path),
-                        candles=len(validation.valid_candles),
-                    )
-                except (StorageError, OSError) as exc:
-                    windows_failed += 1
-                    error_msg = f"Storage failure: {exc}"
-                    _log_event(
-                        "error",
-                        "storage_failure",
-                        run_id=run_id,
-                        window_index=window.index,
-                        error=str(exc),
-                    )
-                    exit_code = 5
-                    break
-        finally:
-            if owns_client:
-                cb_client.close()
-            status_str = "SUCCEEDED" if exit_code == 0 else "FAILED"
-            completed_t = _resolve_clock(clock)
-            db_manager.release_lock(
-                run_id=run_id,
-                status=status_str,
-                completed_at_utc=completed_t,
-                error_message=error_msg,
-            )
-
-        summary = {
-            "run_id": run_id,
-            "status": "success" if exit_code == 0 else "failure",
-            "requested_start_utc": format_canonical_utc(start_utc),
-            "requested_end_utc": format_canonical_utc(end_utc),
-            "windows_planned": len(plan.windows),
-            "windows_succeeded": windows_succeeded,
-            "windows_failed": windows_failed,
-            "candles_ingested": candles_ingested,
-            "output_dir": str(output_dir),
-            "files_written": files_written,
-        }
-        sys.stdout.write(json.dumps(summary, indent=2) + "\n")
-
-        if error_msg is not None:
-            sys.stderr.write(f"error: {error_msg}\n")
-
-        return exit_code
+            summary = {
+                "run_id": run_id,
+                "status": "success" if exit_code == 0 else "failure",
+                "requested_start_utc": format_canonical_utc(start_utc),
+                "requested_end_utc": format_canonical_utc(end_utc),
+                "windows_planned": len(plan.windows),
+                "windows_succeeded": w_succ,
+                "windows_failed": w_fail,
+                "candles_ingested": c_ing,
+                "output_dir": str(output_dir),
+                "files_written": files_w,
+            }
+            sys.stdout.write(json.dumps(summary, indent=2) + "\n")
+            if err_msg is not None:
+                sys.stderr.write(f"error: {err_msg}\n")
+            return exit_code
 
     if args.command == "promote":
         now_utc = _resolve_clock(clock)
@@ -675,184 +829,64 @@ def main(
         raw_dir = Path(args.raw_dir)
         curated_dir = Path(args.curated_dir)
         db_path = Path(args.db_path)
-
         db_manager = DuckDBManager(db_path=db_path, curated_dir=curated_dir)
         db_manager.initialize()
 
-        if not db_manager.acquire_lock(run_id=run_id, mode="promote", started_at_utc=now_utc):
-            _log_event("error", "concurrent_run_detected", run_id=run_id)
-            sys.stderr.write("error: concurrent run detected\n")
-            return 6
+        with _managed_run_lock(db_manager, run_id, "promote", now_utc, clock=clock) as lock_ctx:
+            if lock_ctx is None:
+                return 6
 
-        _log_event(
-            "info",
-            "promote_started",
-            run_id=run_id,
-            raw_dir=str(raw_dir),
-            curated_dir=str(curated_dir),
-            db_path=str(db_path),
-        )
-
-        try:
-            envelopes = read_raw_envelopes(raw_dir)
-        except Exception as exc:
-            db_manager.release_lock(
+            _log_event(
+                "info",
+                "promote_started",
                 run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
+                raw_dir=str(raw_dir),
+                curated_dir=str(curated_dir),
+                db_path=str(db_path),
             )
-            _log_event("error", "raw_read_failed", run_id=run_id, error=str(exc))
-            sys.stderr.write(f"error: failed to read raw envelopes: {exc}\n")
-            return 2
 
-        if not envelopes:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="SUCCEEDED",
-                completed_at_utc=_resolve_clock(clock),
+            code, err, n_env, n_rows, n_parts = _promote_market_data(
+                raw_dir,
+                curated_dir,
+                db_manager,
+                run_id,
+                now_utc,
+                clock=clock,
+                update_watermark=True,
             )
-            sys.stderr.write(f"No raw envelopes found in {raw_dir}\n")
+            if code != 0:
+                lock_ctx.status = "FAILED"
+                lock_ctx.error_message = err
+                return code
+
+            if n_env == 0:
+                sys.stderr.write(f"No raw envelopes found in {raw_dir}\n")
+
+            new_wm = db_manager.get_watermark()
+            lock_ctx.rows_promoted = n_rows
+            lock_ctx.partitions_written = n_parts
+            lock_ctx.raw_envelopes_read = n_env
+            lock_ctx.new_watermark_utc = new_wm
+
+            _log_event(
+                "info",
+                "promote_completed",
+                run_id=run_id,
+                rows_promoted=n_rows,
+                partitions_written=n_parts,
+            )
+
             summary = {
                 "run_id": run_id,
                 "status": "success",
-                "raw_envelopes_read": 0,
-                "rows_promoted": 0,
-                "partitions_written": 0,
+                "raw_envelopes_read": n_env,
+                "rows_promoted": n_rows,
+                "partitions_written": n_parts,
                 "curated_dir": str(curated_dir),
                 "db_path": str(db_path),
             }
             sys.stdout.write(json.dumps(summary, indent=2) + "\n")
             return 0
-
-        # Step 2 & 3: Normalize and validate quality checks
-        try:
-            candles = normalize_envelopes(envelopes, now_utc=now_utc)
-        except QualityCheckError as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            _log_event("error", "quality_failure", run_id=run_id, error=str(exc))
-            sys.stderr.write(f"error: quality failure: {exc}\n")
-            return 4
-        except Exception as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            _log_event("error", "normalization_failure", run_id=run_id, error=str(exc))
-            sys.stderr.write(f"error: normalization failure: {exc}\n")
-            return 4
-
-        # Step 3b: Run dataset quality checks
-        req_start = min((e.start_utc for e in envelopes), default=None)
-        req_end = max((e.end_utc for e in envelopes), default=None)
-        quality_records = run_dataset_quality_checks(
-            candles,
-            run_id=run_id,
-            requested_start=req_start,
-            requested_end=req_end,
-            evaluated_at_utc=now_utc,
-        )
-        try:
-            db_manager.record_quality_checks(quality_records)
-        except Exception as exc:
-            _log_event("warn", "quality_checks_persist_failed", error=str(exc))
-
-        blocking_failures = [
-            r for r in quality_records if r.severity == "BLOCK" and r.status == "FAILED"
-        ]
-        if blocking_failures:
-            failure_details = "; ".join(f"{r.rule_name}: {r.details}" for r in blocking_failures)
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=f"Dataset quality check violation: {failure_details}",
-            )
-            _log_event("error", "quality_check_blocked", run_id=run_id, details=failure_details)
-            sys.stderr.write(f"error: quality check violation: {failure_details}\n")
-            return 4
-
-        warn_failures = [
-            r for r in quality_records if r.severity == "WARN" and r.status == "FAILED"
-        ]
-        if warn_failures:
-            warn_details = "; ".join(f"{r.rule_name}: {r.details}" for r in warn_failures)
-            _log_event("warn", "quality_check_warning", run_id=run_id, details=warn_details)
-
-        # Step 4: Write/merge Parquet partitions
-        try:
-            partitions = write_parquet_partitions(candles, curated_dir=curated_dir)
-        except (ParquetStorageError, OSError) as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            _log_event("error", "storage_failure", run_id=run_id, error=str(exc))
-            sys.stderr.write(f"error: storage failure: {exc}\n")
-            return 5
-
-        # Step 5 & 6: Initialize DuckDB views & update watermark & release lock
-        try:
-            db_manager.initialize()
-            completed_at_utc = _resolve_clock(clock)
-
-            # Set initial watermark or advance watermark
-            if candles:
-                max_candle_ts = max(c.candle_start_utc for c in candles)
-                current_wm = db_manager.get_watermark()
-                if current_wm is None or max_candle_ts > current_wm:
-                    db_manager.set_watermark(max_candle_ts, run_id=run_id, now_utc=completed_at_utc)
-
-            new_wm = db_manager.get_watermark()
-            db_manager.release_lock(
-                run_id=run_id,
-                status="SUCCEEDED",
-                completed_at_utc=completed_at_utc,
-                rows_promoted=len(candles),
-                partitions_written=len(partitions),
-                raw_envelopes_read=len(envelopes),
-                new_watermark_utc=new_wm,
-                error_message=None,
-            )
-        except Exception as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            _log_event("error", "database_failure", run_id=run_id, error=str(exc))
-            sys.stderr.write(f"error: database failure: {exc}\n")
-            return 5
-
-        _log_event(
-            "info",
-            "promote_completed",
-            run_id=run_id,
-            rows_promoted=len(candles),
-            partitions_written=len(partitions),
-        )
-
-        summary = {
-            "run_id": run_id,
-            "status": "success",
-            "raw_envelopes_read": len(envelopes),
-            "rows_promoted": len(candles),
-            "partitions_written": len(partitions),
-            "curated_dir": str(curated_dir),
-            "db_path": str(db_path),
-        }
-        sys.stdout.write(json.dumps(summary, indent=2) + "\n")
-        return 0
 
     if args.command == "incremental":
         now_utc = _resolve_clock(clock)
@@ -865,272 +899,172 @@ def main(
         db_manager = DuckDBManager(db_path=db_path, curated_dir=curated_dir)
         db_manager.initialize()
 
-        # Step 1: Acquire run lock
-        if not db_manager.acquire_lock(run_id=run_id, mode="incremental", started_at_utc=now_utc):
-            _log_event("error", "concurrent_run_detected", run_id=run_id)
-            sys.stderr.write("error: concurrent run detected\n")
-            return 6
+        with _managed_run_lock(db_manager, run_id, "incremental", now_utc, clock=clock) as lock_ctx:
+            if lock_ctx is None:
+                return 6
 
-        # Step 2: Read current watermark
-        watermark = db_manager.get_watermark()
-        if watermark is None:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message="No watermark found. Run a backfill first.",
+            watermark = db_manager.get_watermark()
+            if watermark is None:
+                lock_ctx.status = "FAILED"
+                lock_ctx.error_message = "No watermark found. Run a backfill first."
+                sys.stderr.write("error: No watermark found. Run a backfill first.\n")
+                return 2
+
+            lock_ctx.old_watermark_utc = watermark
+            start_utc = watermark - timedelta(hours=overlap_hours)
+            end_utc = now_utc.replace(minute=0, second=0, microsecond=0)
+
+            if start_utc >= end_utc:
+                lock_ctx.new_watermark_utc = watermark
+                sys.stderr.write("Nothing to fetch, data is fresh.\n")
+                summary = {
+                    "run_id": run_id,
+                    "status": "success",
+                    "mode": "incremental",
+                    "message": "Nothing to fetch, data is fresh.",
+                    "old_watermark_utc": format_canonical_utc(watermark),
+                    "new_watermark_utc": format_canonical_utc(watermark),
+                    "windows_planned": 0,
+                    "windows_succeeded": 0,
+                    "windows_failed": 0,
+                    "candles_ingested": 0,
+                    "rows_promoted": 0,
+                    "partitions_written": 0,
+                    "raw_envelopes_read": 0,
+                }
+                sys.stdout.write(json.dumps(summary, indent=2) + "\n")
+                return 0
+
+            try:
+                plan = plan_backfill(start_utc, end_utc, now_utc=now_utc)
+            except Exception as exc:
+                lock_ctx.status = "FAILED"
+                lock_ctx.error_message = str(exc)
+                sys.stderr.write(f"error: window planning failed: {exc}\n")
+                return 2
+
+            cb_client = client if client is not None else CoinbaseClient()
+            owns_client = client is None
+            try:
+                exit_code, w_succ, w_fail, c_ing, files_w, err_msg = _ingest_windows(
+                    cb_client, plan.windows, run_id, raw_dir
+                )
+            finally:
+                if owns_client:
+                    cb_client.close()
+
+            if exit_code != 0:
+                lock_ctx.status = "FAILED"
+                lock_ctx.new_watermark_utc = watermark
+                lock_ctx.error_message = err_msg
+                summary = {
+                    "run_id": run_id,
+                    "status": "failure",
+                    "mode": "incremental",
+                    "old_watermark_utc": format_canonical_utc(watermark),
+                    "new_watermark_utc": format_canonical_utc(watermark),
+                    "windows_planned": len(plan.windows),
+                    "windows_succeeded": w_succ,
+                    "windows_failed": w_fail,
+                    "candles_ingested": c_ing,
+                    "output_dir": str(raw_dir),
+                    "files_written": files_w,
+                }
+                sys.stdout.write(json.dumps(summary, indent=2) + "\n")
+                if err_msg:
+                    sys.stderr.write(f"error: {err_msg}\n")
+                return exit_code
+
+            code, err, n_env, n_rows, n_parts = _promote_market_data(
+                raw_dir,
+                curated_dir,
+                db_manager,
+                run_id,
+                now_utc,
+                clock=clock,
+                update_watermark=True,
             )
-            sys.stderr.write("error: No watermark found. Run a backfill first.\n")
-            return 2
+            if code != 0:
+                lock_ctx.status = "FAILED"
+                lock_ctx.new_watermark_utc = watermark
+                lock_ctx.error_message = err
+                return code
 
-        # Step 3 & 4: Calculate interval
-        start_utc = watermark - timedelta(hours=overlap_hours)
-        end_utc = now_utc.replace(minute=0, second=0, microsecond=0)
+            new_watermark = db_manager.get_watermark() or watermark
+            lock_ctx.rows_promoted = n_rows
+            lock_ctx.partitions_written = n_parts
+            lock_ctx.raw_envelopes_read = n_env
+            lock_ctx.new_watermark_utc = new_watermark
 
-        # Step 5: Check if nothing to fetch
-        if start_utc >= end_utc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="SUCCEEDED",
-                completed_at_utc=_resolve_clock(clock),
-                old_watermark_utc=watermark,
-                new_watermark_utc=watermark,
-            )
-            sys.stderr.write("Nothing to fetch, data is fresh.\n")
             summary = {
                 "run_id": run_id,
                 "status": "success",
                 "mode": "incremental",
-                "message": "Nothing to fetch, data is fresh.",
                 "old_watermark_utc": format_canonical_utc(watermark),
-                "new_watermark_utc": format_canonical_utc(watermark),
-                "windows_planned": 0,
-                "windows_succeeded": 0,
+                "new_watermark_utc": format_canonical_utc(new_watermark),
+                "windows_planned": len(plan.windows),
+                "windows_succeeded": w_succ,
                 "windows_failed": 0,
-                "candles_ingested": 0,
-                "rows_promoted": 0,
-                "partitions_written": 0,
-                "raw_envelopes_read": 0,
+                "candles_ingested": c_ing,
+                "raw_envelopes_read": n_env,
+                "rows_promoted": n_rows,
+                "partitions_written": n_parts,
+                "curated_dir": str(curated_dir),
+                "db_path": str(db_path),
             }
             sys.stdout.write(json.dumps(summary, indent=2) + "\n")
             return 0
 
-        # Step 6: Plan windows
-        try:
-            plan = plan_backfill(start_utc, end_utc, now_utc=now_utc)
-        except Exception as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            sys.stderr.write(f"error: window planning failed: {exc}\n")
-            return 2
-
-        cb_client = client if client is not None else CoinbaseClient()
-        owns_client = client is None
-        windows_succeeded = 0
-        windows_failed = 0
-        candles_ingested = 0
-        files_written = []
-        exit_code = 0
-        error_msg = None
-
-        try:
-            for window in plan.windows:
-                try:
-                    response = cb_client.fetch_candles(window.start_utc, window.end_utc)
-                except (SourceUnavailableError, CoinbaseClientError) as exc:
-                    windows_failed += 1
-                    error_msg = f"Coinbase source unavailable: {exc}"
-                    exit_code = 3
-                    break
-
-                validation = validate_candle_payload(response.raw_payload)
-                if not validation.is_valid:
-                    windows_failed += 1
-                    error_msg = f"Contract violation: {'; '.join(validation.violations)}"
-                    exit_code = 4
-                    break
-
-                try:
-                    envelope = create_raw_envelope(
-                        run_id=run_id,
-                        product_id="BTC-USD",
-                        granularity_seconds=3600,
-                        start_utc=window.start_utc,
-                        end_utc=window.end_utc,
-                        retrieved_at_utc=response.retrieved_at_utc,
-                        http_status=response.http_status,
-                        payload=response.raw_payload,
-                        provider_request_id=response.provider_request_id,
-                    )
-                    file_path = write_raw_envelope(raw_dir, envelope)
-                    files_written.append(str(file_path))
-                    windows_succeeded += 1
-                    candles_ingested += len(validation.valid_candles)
-                except (StorageError, OSError) as exc:
-                    windows_failed += 1
-                    error_msg = f"Storage failure: {exc}"
-                    exit_code = 5
-                    break
-        finally:
-            if owns_client:
-                cb_client.close()
-
-        if exit_code != 0:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                old_watermark_utc=watermark,
-                new_watermark_utc=watermark,
-                error_message=error_msg,
-            )
-            summary = {
-                "run_id": run_id,
-                "status": "failure",
-                "mode": "incremental",
-                "old_watermark_utc": format_canonical_utc(watermark),
-                "new_watermark_utc": format_canonical_utc(watermark),
-                "windows_planned": len(plan.windows),
-                "windows_succeeded": windows_succeeded,
-                "windows_failed": windows_failed,
-                "candles_ingested": candles_ingested,
-                "output_dir": str(raw_dir),
-                "files_written": files_written,
-            }
-            sys.stdout.write(json.dumps(summary, indent=2) + "\n")
-            if error_msg:
-                sys.stderr.write(f"error: {error_msg}\n")
-            return exit_code
-
-        # Step 7: Read ALL raw envelopes from raw_dir
-        try:
-            envelopes = read_raw_envelopes(raw_dir)
-        except Exception as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            sys.stderr.write(f"error: failed to read raw envelopes: {exc}\n")
-            return 2
-
-        # Step 8: Normalize & quality check
-        try:
-            candles = normalize_envelopes(envelopes, now_utc=now_utc)
-        except QualityCheckError as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            sys.stderr.write(f"error: quality failure: {exc}\n")
-            return 4
-        except Exception as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            sys.stderr.write(f"error: normalization failure: {exc}\n")
-            return 4
-
-        # Step 8b: Run dataset quality checks
-        req_start = min((e.start_utc for e in envelopes), default=None)
-        req_end = max((e.end_utc for e in envelopes), default=None)
-        quality_records = run_dataset_quality_checks(
-            candles,
-            run_id=run_id,
-            requested_start=req_start,
-            requested_end=req_end,
-            evaluated_at_utc=now_utc,
-        )
-        try:
-            db_manager.record_quality_checks(quality_records)
-        except Exception as exc:
-            _log_event("warn", "quality_checks_persist_failed", error=str(exc))
-
-        blocking_failures = [
-            r for r in quality_records if r.severity == "BLOCK" and r.status == "FAILED"
-        ]
-        if blocking_failures:
-            failure_details = "; ".join(f"{r.rule_name}: {r.details}" for r in blocking_failures)
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                old_watermark_utc=watermark,
-                new_watermark_utc=watermark,
-                error_message=f"Quality check violation: {failure_details}",
-            )
-            _log_event("error", "quality_check_blocked", run_id=run_id, details=failure_details)
-            sys.stderr.write(f"error: quality check violation: {failure_details}\n")
-            return 4
-
-        warn_failures = [
-            r for r in quality_records if r.severity == "WARN" and r.status == "FAILED"
-        ]
-        if warn_failures:
-            warn_details = "; ".join(f"{r.rule_name}: {r.details}" for r in warn_failures)
-            _log_event("warn", "quality_check_warning", run_id=run_id, details=warn_details)
-
-        # Step 9: Write/merge Parquet partitions
-        try:
-            partitions = write_parquet_partitions(candles, curated_dir=curated_dir)
-        except (ParquetStorageError, OSError) as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            sys.stderr.write(f"error: storage failure: {exc}\n")
-            return 5
-
-        # Step 10: Update DuckDB views
+    if args.command == "repair":
+        now_utc = _resolve_clock(clock)
+        run_id = str(uuid.uuid4())
+        raw_dir = Path(args.raw_dir)
+        curated_dir = Path(args.curated_dir)
+        db_path = Path(args.db_path)
+        db_manager = DuckDBManager(db_path=db_path, curated_dir=curated_dir)
         db_manager.initialize()
 
-        # Step 11: Advance watermark
-        max_ts = max(c.candle_start_utc for c in candles) if candles else watermark
-        db_manager.set_watermark(max_ts, run_id=run_id, now_utc=_resolve_clock(clock))
-        new_watermark = db_manager.get_watermark() or max_ts
+        if args.force:
+            db_manager.force_clear_lock(stale_threshold_seconds=3600, now_utc=now_utc)
 
-        # Step 12: Release lock
-        completed_at = _resolve_clock(clock)
-        db_manager.release_lock(
-            run_id=run_id,
-            status="SUCCEEDED",
-            completed_at_utc=completed_at,
-            rows_promoted=len(candles),
-            partitions_written=len(partitions),
-            raw_envelopes_read=len(envelopes),
-            new_watermark_utc=new_watermark,
-        )
+        with _managed_run_lock(db_manager, run_id, "repair", now_utc, clock=clock) as lock_ctx:
+            if lock_ctx is None:
+                return 6
 
-        summary = {
-            "run_id": run_id,
-            "status": "success",
-            "mode": "incremental",
-            "old_watermark_utc": format_canonical_utc(watermark),
-            "new_watermark_utc": format_canonical_utc(new_watermark),
-            "windows_planned": len(plan.windows),
-            "windows_succeeded": windows_succeeded,
-            "windows_failed": 0,
-            "candles_ingested": candles_ingested,
-            "raw_envelopes_read": len(envelopes),
-            "rows_promoted": len(candles),
-            "partitions_written": len(partitions),
-            "curated_dir": str(curated_dir),
-            "db_path": str(db_path),
-        }
-        sys.stdout.write(json.dumps(summary, indent=2) + "\n")
-        return 0
+            code, err, n_env, n_rows, n_parts = _promote_market_data(
+                raw_dir,
+                curated_dir,
+                db_manager,
+                run_id,
+                now_utc,
+                clock=clock,
+                update_watermark=False,
+                clear_existing=True,
+            )
+            if code != 0:
+                lock_ctx.status = "FAILED"
+                lock_ctx.error_message = err
+                return code
+
+            if n_env == 0:
+                sys.stderr.write(f"No raw envelopes found in {raw_dir}\n")
+
+            lock_ctx.rows_promoted = n_rows
+            lock_ctx.partitions_written = n_parts
+            lock_ctx.raw_envelopes_read = n_env
+
+            summary = {
+                "run_id": run_id,
+                "status": "success",
+                "mode": "repair",
+                "raw_envelopes_read": n_env,
+                "rows_promoted": n_rows,
+                "partitions_written": n_parts,
+                "curated_dir": str(curated_dir),
+                "db_path": str(db_path),
+            }
+            sys.stdout.write(json.dumps(summary, indent=2) + "\n")
+            return 0
 
     if args.command == "status":
         db_path = Path(args.db_path)
@@ -1160,123 +1094,9 @@ def main(
         )
         return 0
 
-    if args.command == "repair":
-        now_utc = _resolve_clock(clock)
-        run_id = str(uuid.uuid4())
-        raw_dir = Path(args.raw_dir)
-        curated_dir = Path(args.curated_dir)
-        db_path = Path(args.db_path)
-
-        db_manager = DuckDBManager(db_path=db_path, curated_dir=curated_dir)
-        db_manager.initialize()
-
-        if args.force:
-            db_manager.force_clear_lock(stale_threshold_seconds=3600, now_utc=now_utc)
-
-        if not db_manager.acquire_lock(run_id=run_id, mode="repair", started_at_utc=now_utc):
-            _log_event("error", "concurrent_run_detected", run_id=run_id)
-            sys.stderr.write("error: concurrent run detected\n")
-            return 6
-
-        try:
-            envelopes = read_raw_envelopes(raw_dir)
-        except Exception as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            sys.stderr.write(f"error: failed to read raw envelopes: {exc}\n")
-            return 2
-
-        if not envelopes:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="SUCCEEDED",
-                completed_at_utc=_resolve_clock(clock),
-            )
-            sys.stderr.write(f"No raw envelopes found in {raw_dir}\n")
-            summary = {
-                "run_id": run_id,
-                "status": "success",
-                "mode": "repair",
-                "raw_envelopes_read": 0,
-                "rows_promoted": 0,
-                "partitions_written": 0,
-                "curated_dir": str(curated_dir),
-                "db_path": str(db_path),
-            }
-            sys.stdout.write(json.dumps(summary, indent=2) + "\n")
-            return 0
-
-        try:
-            candles = normalize_envelopes(envelopes, now_utc=now_utc)
-        except QualityCheckError as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            sys.stderr.write(f"error: quality failure: {exc}\n")
-            return 4
-        except Exception as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            sys.stderr.write(f"error: normalization failure: {exc}\n")
-            return 4
-
-        # Full rebuild: remove existing parquet files under curated_dir
-        for p_file in curated_dir.glob("market/candles_hourly/source=*/year=*/*.parquet"):
-            with contextlib.suppress(OSError):
-                p_file.unlink()
-
-        try:
-            partitions = write_parquet_partitions(candles, curated_dir=curated_dir)
-        except (ParquetStorageError, OSError) as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            sys.stderr.write(f"error: storage failure: {exc}\n")
-            return 5
-
-        db_manager.initialize()
-
-        # Do NOT change watermark (preserve monotonicity)
-        completed_at = _resolve_clock(clock)
-        db_manager.release_lock(
-            run_id=run_id,
-            status="SUCCEEDED",
-            completed_at_utc=completed_at,
-            rows_promoted=len(candles),
-            partitions_written=len(partitions),
-            raw_envelopes_read=len(envelopes),
-        )
-
-        summary = {
-            "run_id": run_id,
-            "status": "success",
-            "mode": "repair",
-            "raw_envelopes_read": len(envelopes),
-            "rows_promoted": len(candles),
-            "partitions_written": len(partitions),
-            "curated_dir": str(curated_dir),
-            "db_path": str(db_path),
-        }
-        sys.stdout.write(json.dumps(summary, indent=2) + "\n")
-        return 0
-
     if args.command == "fetch-network":
+        now_utc = _resolve_clock(clock)
         try:
-            now_utc = _resolve_clock(clock)
             start_dt = _parse_cli_date(args.start, "--start")
             end_dt = _parse_cli_date(args.end, "--end")
             if start_dt > end_dt:
@@ -1299,20 +1119,6 @@ def main(
         db_manager = DuckDBManager(db_path=db_path, curated_dir=db_path.parent)
         db_manager.initialize()
 
-        if not db_manager.acquire_lock(
-            run_id=run_id,
-            mode="fetch_network",
-            started_at_utc=now_utc,
-            requested_start_utc=start_dt,
-            requested_end_utc=end_dt,
-        ):
-            _log_event("error", "concurrent_run_detected", run_id=run_id)
-            sys.stderr.write("error: concurrent run detected\n")
-            return 6
-
-        cm_client = network_client if network_client is not None else CoinMetricsClient()
-        owns_client = network_client is None
-
         _log_event(
             "info",
             "fetch_network_started",
@@ -1322,99 +1128,113 @@ def main(
             output_dir=str(output_dir),
         )
 
-        exit_code = 0
-        net_error_msg: str | None = None
-        records_ingested = 0
-        net_files_written: list[str] = []
-        cm_response = None
+        with _managed_run_lock(
+            db_manager,
+            run_id,
+            "fetch_network",
+            now_utc,
+            clock=clock,
+            requested_start_utc=start_dt,
+            requested_end_utc=end_dt,
+        ) as lock_ctx:
+            if lock_ctx is None:
+                return 6
 
-        try:
+            cm_client = network_client if network_client is not None else CoinMetricsClient()
+            owns_client = network_client is None
+            exit_code = 0
+            net_error_msg: str | None = None
+            records_ingested = 0
+            net_files_written: list[str] = []
+            cm_response = None
+
             try:
-                cm_response = cm_client.fetch_asset_metrics(
-                    start_time=start_str,
-                    end_time=end_str,
-                )
-            except CoinMetricsSourceUnavailableError as exc:
-                net_error_msg = f"Coin Metrics source unavailable: {exc}"
-                _log_event("error", "source_unavailable", run_id=run_id, error=str(exc))
-                exit_code = 3
-            except CoinMetricsHTTPError as exc:
-                net_error_msg = f"Coin Metrics HTTP error: {exc}"
-                _log_event("error", "coin_metrics_http_error", run_id=run_id, error=str(exc))
-                exit_code = 3
-            except CoinMetricsClientError as exc:
-                net_error_msg = f"Coin Metrics client error: {exc}"
-                _log_event("error", "coin_metrics_error", run_id=run_id, error=str(exc))
-                exit_code = 3
-            except CoinMetricsContractViolationError as exc:
-                net_error_msg = f"Contract violation: {exc}"
-                _log_event("error", "contract_violation", run_id=run_id, error=str(exc))
-                exit_code = 4
-
-            if exit_code == 0 and cm_response is not None:
-                cm_validation = validate_coin_metrics_payload(cm_response.raw_payload)
-                if not cm_validation.is_valid:
-                    net_error_msg = f"Contract violation: {'; '.join(cm_validation.violations)}"
-                    _log_event(
-                        "error",
-                        "contract_violation",
-                        run_id=run_id,
-                        violations=cm_validation.violations,
+                try:
+                    cm_response = cm_client.fetch_asset_metrics(
+                        start_time=start_str,
+                        end_time=end_str,
                     )
+                except (
+                    CoinMetricsSourceUnavailableError,
+                    CoinMetricsHTTPError,
+                    CoinMetricsClientError,
+                ) as exc:
+                    if isinstance(exc, CoinMetricsSourceUnavailableError):
+                        net_error_msg = f"Coin Metrics source unavailable: {exc}"
+                        event = "source_unavailable"
+                    elif isinstance(exc, CoinMetricsHTTPError):
+                        net_error_msg = f"Coin Metrics HTTP error: {exc}"
+                        event = "coin_metrics_http_error"
+                    else:
+                        net_error_msg = f"Coin Metrics client error: {exc}"
+                        event = "coin_metrics_error"
+                    _log_event("error", event, run_id=run_id, error=str(exc))
+                    exit_code = 3
+                except CoinMetricsContractViolationError as exc:
+                    net_error_msg = f"Contract violation: {exc}"
+                    _log_event("error", "contract_violation", run_id=run_id, error=str(exc))
                     exit_code = 4
-                else:
-                    try:
-                        envelope = create_network_raw_envelope(
-                            run_id=run_id,
-                            asset="btc",
-                            metrics="TxCnt,AdrActCnt",
-                            frequency="1d",
-                            start_time=start_str,
-                            end_time=end_str,
-                            retrieved_at_utc=cm_response.retrieved_at_utc,
-                            http_status=cm_response.http_status,
-                            payload=cm_response.raw_payload,
-                            provider_request_id=cm_response.provider_request_id,
-                        )
-                        file_path = write_network_raw_envelope(output_dir, envelope)
-                        net_files_written.append(str(file_path))
-                        records_ingested = len(cm_validation.valid_records)
-                        _log_event(
-                            "info",
-                            "network_persisted",
-                            run_id=run_id,
-                            path=str(file_path),
-                            records=records_ingested,
-                        )
-                    except Exception as exc:
-                        net_error_msg = f"Storage failure: {exc}"
-                        _log_event("error", "storage_failure", run_id=run_id, error=str(exc))
-                        exit_code = 5
-        finally:
-            if owns_client:
-                cm_client.close()
-            status_str = "SUCCEEDED" if exit_code == 0 else "FAILED"
-            completed_t = _resolve_clock(clock)
-            db_manager.release_lock(
-                run_id=run_id,
-                status=status_str,
-                completed_at_utc=completed_t,
-                error_message=net_error_msg,
-            )
 
-        fetch_summary: dict[str, Any] = {
-            "run_id": run_id,
-            "status": "success" if exit_code == 0 else "failure",
-            "requested_start": start_str,
-            "requested_end": end_str,
-            "records_ingested": records_ingested,
-            "output_dir": str(output_dir),
-            "files_written": net_files_written,
-        }
-        sys.stdout.write(json.dumps(fetch_summary, indent=2) + "\n")
-        if net_error_msg is not None:
-            sys.stderr.write(f"error: {net_error_msg}\n")
-        return exit_code
+                if exit_code == 0 and cm_response is not None:
+                    cm_validation = validate_coin_metrics_payload(cm_response.raw_payload)
+                    if not cm_validation.is_valid:
+                        net_error_msg = f"Contract violation: {'; '.join(cm_validation.violations)}"
+                        _log_event(
+                            "error",
+                            "contract_violation",
+                            run_id=run_id,
+                            violations=cm_validation.violations,
+                        )
+                        exit_code = 4
+                    else:
+                        try:
+                            envelope = create_network_raw_envelope(
+                                run_id=run_id,
+                                asset="btc",
+                                metrics="TxCnt,AdrActCnt",
+                                frequency="1d",
+                                start_time=start_str,
+                                end_time=end_str,
+                                retrieved_at_utc=cm_response.retrieved_at_utc,
+                                http_status=cm_response.http_status,
+                                payload=cm_response.raw_payload,
+                                provider_request_id=cm_response.provider_request_id,
+                            )
+                            file_path = write_network_raw_envelope(output_dir, envelope)
+                            net_files_written.append(str(file_path))
+                            records_ingested = len(cm_validation.valid_records)
+                            _log_event(
+                                "info",
+                                "network_persisted",
+                                run_id=run_id,
+                                path=str(file_path),
+                                records=records_ingested,
+                            )
+                        except Exception as exc:
+                            net_error_msg = f"Storage failure: {exc}"
+                            _log_event("error", "storage_failure", run_id=run_id, error=str(exc))
+                            exit_code = 5
+            finally:
+                if owns_client:
+                    cm_client.close()
+
+            if exit_code != 0:
+                lock_ctx.status = "FAILED"
+                lock_ctx.error_message = net_error_msg
+
+            fetch_summary: dict[str, Any] = {
+                "run_id": run_id,
+                "status": "success" if exit_code == 0 else "failure",
+                "requested_start": start_str,
+                "requested_end": end_str,
+                "records_ingested": records_ingested,
+                "output_dir": str(output_dir),
+                "files_written": net_files_written,
+            }
+            sys.stdout.write(json.dumps(fetch_summary, indent=2) + "\n")
+            if net_error_msg is not None:
+                sys.stderr.write(f"error: {net_error_msg}\n")
+            return exit_code
 
     if args.command == "promote-network":
         now_utc = _resolve_clock(clock)
@@ -1426,139 +1246,104 @@ def main(
         db_manager = DuckDBManager(db_path=db_path, curated_dir=curated_dir)
         db_manager.initialize()
 
-        if not db_manager.acquire_lock(
-            run_id=run_id, mode="promote_network", started_at_utc=now_utc
-        ):
-            _log_event("error", "concurrent_run_detected", run_id=run_id)
-            sys.stderr.write("error: concurrent run detected\n")
-            return 6
+        with _managed_run_lock(
+            db_manager, run_id, "promote_network", now_utc, clock=clock
+        ) as lock_ctx:
+            if lock_ctx is None:
+                return 6
 
-        _log_event(
-            "info",
-            "promote_network_started",
-            run_id=run_id,
-            raw_dir=str(raw_dir),
-            curated_dir=str(curated_dir),
-            db_path=str(db_path),
-        )
-
-        try:
-            net_envelopes = read_network_raw_envelopes(raw_dir)
-        except Exception as exc:
-            db_manager.release_lock(
+            _log_event(
+                "info",
+                "promote_network_started",
                 run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
+                raw_dir=str(raw_dir),
+                curated_dir=str(curated_dir),
+                db_path=str(db_path),
             )
-            _log_event("error", "raw_read_failed", run_id=run_id, error=str(exc))
-            sys.stderr.write(f"error: failed to read raw network envelopes: {exc}\n")
-            return 2
 
-        if not net_envelopes:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="SUCCEEDED",
-                completed_at_utc=_resolve_clock(clock),
-            )
-            sys.stderr.write(f"No raw network envelopes found in {raw_dir}\n")
-            empty_summary: dict[str, Any] = {
+            try:
+                net_envelopes = read_network_raw_envelopes(raw_dir)
+            except Exception as exc:
+                lock_ctx.status = "FAILED"
+                lock_ctx.error_message = str(exc)
+                _log_event("error", "raw_read_failed", run_id=run_id, error=str(exc))
+                sys.stderr.write(f"error: failed to read raw network envelopes: {exc}\n")
+                return 2
+
+            if not net_envelopes:
+                sys.stderr.write(f"No raw network envelopes found in {raw_dir}\n")
+                empty_summary: dict[str, Any] = {
+                    "run_id": run_id,
+                    "status": "success",
+                    "raw_envelopes_read": 0,
+                    "rows_promoted": 0,
+                    "partitions_written": 0,
+                    "watermark_utc": None,
+                    "curated_dir": str(curated_dir),
+                    "db_path": str(db_path),
+                }
+                sys.stdout.write(json.dumps(empty_summary, indent=2) + "\n")
+                return 0
+
+            try:
+                net_metrics = normalize_network_envelopes(net_envelopes, now_utc=now_utc)
+            except CoinMetricsContractViolationError as exc:
+                lock_ctx.status = "FAILED"
+                lock_ctx.error_message = str(exc)
+                _log_event("error", "quality_failure", run_id=run_id, error=str(exc))
+                sys.stderr.write(f"error: network metric contract violation: {exc}\n")
+                return 4
+            except Exception as exc:
+                lock_ctx.status = "FAILED"
+                lock_ctx.error_message = str(exc)
+                _log_event("error", "normalization_failure", run_id=run_id, error=str(exc))
+                sys.stderr.write(f"error: network normalization failure: {exc}\n")
+                return 4
+
+            try:
+                net_partitions = write_network_parquet_partitions(
+                    net_metrics, curated_dir=curated_dir
+                )
+            except NetworkParquetStorageError as exc:
+                lock_ctx.status = "FAILED"
+                lock_ctx.error_message = str(exc)
+                _log_event("error", "parquet_write_failed", run_id=run_id, error=str(exc))
+                sys.stderr.write(f"error: failed writing network Parquet: {exc}\n")
+                return 5
+
+            db_manager.create_network_fact_view()
+            db_manager.create_cross_domain_mart_view()
+
+            max_date = max((m.metric_date_utc for m in net_metrics), default=None)
+            old_wm = db_manager.get_watermark(pipeline_id="coin_metrics_daily")
+            new_wm = old_wm
+            if max_date is not None:
+                db_manager.set_watermark(
+                    watermark_utc=max_date,
+                    run_id=run_id,
+                    pipeline_id="coin_metrics_daily",
+                    now_utc=now_utc,
+                )
+                new_wm = max_date
+
+            lock_ctx.rows_promoted = len(net_metrics)
+            lock_ctx.partitions_written = len(net_partitions)
+            lock_ctx.raw_envelopes_read = len(net_envelopes)
+            lock_ctx.old_watermark_utc = old_wm
+            lock_ctx.new_watermark_utc = new_wm
+
+            promote_summary: dict[str, Any] = {
                 "run_id": run_id,
                 "status": "success",
-                "raw_envelopes_read": 0,
-                "rows_promoted": 0,
-                "partitions_written": 0,
+                "raw_envelopes_read": len(net_envelopes),
+                "rows_promoted": len(net_metrics),
+                "partitions_written": len(net_partitions),
+                "watermark_utc": format_canonical_utc(new_wm) if new_wm else None,
                 "curated_dir": str(curated_dir),
                 "db_path": str(db_path),
             }
-            sys.stdout.write(json.dumps(empty_summary, indent=2) + "\n")
+            sys.stdout.write(json.dumps(promote_summary, indent=2) + "\n")
             return 0
-
-        try:
-            net_metrics = normalize_network_envelopes(net_envelopes, now_utc=now_utc)
-        except CoinMetricsContractViolationError as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            _log_event("error", "quality_failure", run_id=run_id, error=str(exc))
-            sys.stderr.write(f"error: network metric contract violation: {exc}\n")
-            return 4
-        except Exception as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            _log_event("error", "normalization_failure", run_id=run_id, error=str(exc))
-            sys.stderr.write(f"error: network normalization failure: {exc}\n")
-            return 4
-
-        try:
-            net_partitions = write_network_parquet_partitions(net_metrics, curated_dir=curated_dir)
-        except NetworkParquetStorageError as exc:
-            db_manager.release_lock(
-                run_id=run_id,
-                status="FAILED",
-                completed_at_utc=_resolve_clock(clock),
-                error_message=str(exc),
-            )
-            _log_event("error", "parquet_write_failed", run_id=run_id, error=str(exc))
-            sys.stderr.write(f"error: failed writing network Parquet: {exc}\n")
-            return 5
-
-        # Update views
-        db_manager.create_network_fact_view()
-        db_manager.create_cross_domain_mart_view()
-
-        # Watermark update for coin_metrics_daily
-        max_date = max((m.metric_date_utc for m in net_metrics), default=None)
-        old_wm = db_manager.get_watermark(pipeline_id="coin_metrics_daily")
-        new_wm = old_wm
-        if max_date is not None:
-            db_manager.set_watermark(
-                watermark_utc=max_date,
-                run_id=run_id,
-                pipeline_id="coin_metrics_daily",
-                now_utc=now_utc,
-            )
-            new_wm = max_date
-
-        completed_t = _resolve_clock(clock)
-        db_manager.record_run(
-            run_id=run_id,
-            mode="promote_network",
-            started_at_utc=now_utc,
-            completed_at_utc=completed_t,
-            status="SUCCEEDED",
-            rows_promoted=len(net_metrics),
-            partitions_written=len(net_partitions),
-            raw_envelopes_read=len(net_envelopes),
-            old_watermark_utc=old_wm,
-            new_watermark_utc=new_wm,
-        )
-
-        db_manager.release_lock(
-            run_id=run_id,
-            status="SUCCEEDED",
-            completed_at_utc=completed_t,
-        )
-
-        promote_summary: dict[str, Any] = {
-            "run_id": run_id,
-            "status": "success",
-            "raw_envelopes_read": len(net_envelopes),
-            "rows_promoted": len(net_metrics),
-            "partitions_written": len(net_partitions),
-            "watermark_utc": format_canonical_utc(new_wm) if new_wm else None,
-            "curated_dir": str(curated_dir),
-            "db_path": str(db_path),
-        }
-        sys.stdout.write(json.dumps(promote_summary, indent=2) + "\n")
-        return 0
 
     if args.command == "query":
         db_path = Path(args.db_path)

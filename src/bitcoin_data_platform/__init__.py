@@ -1,7 +1,6 @@
 """Bitcoin Data Engineering Platform."""
 
 from bitcoin_data_platform.quality.checks import (
-    CandleLike,
     QualityCheckError,
     check_candle,
     filter_valid_candles,
@@ -82,7 +81,6 @@ __version__ = "0.1.0"
 
 __all__ = [
     "BackfillPlan",
-    "CandleLike",
     "CoinbaseCandle",
     "CoinbaseClient",
     "CoinbaseClientError",

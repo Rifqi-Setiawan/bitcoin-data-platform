@@ -90,22 +90,13 @@ def read_raw_envelopes(raw_dir: Path | str) -> list[RawEnvelope]:
     Returns a list of RawEnvelope instances sorted by start_utc ascending.
     """
     raw_path = Path(raw_dir)
-    if not raw_path.exists() or not raw_path.is_dir():
+    if not raw_path.is_dir():
         return []
 
-    envelopes: list[RawEnvelope] = []
-
-    for file_path in raw_path.iterdir():
-        if not file_path.is_file():
-            continue
-        # Only process files ending with .json.gz (and not temporary .tmp files)
-        if not file_path.name.endswith(".json.gz"):
-            continue
-
-        raw_dict = read_raw_envelope(file_path)
-        envelope = parse_raw_envelope_dict(raw_dict, source_path=file_path)
-        envelopes.append(envelope)
-
-    # Sort envelopes deterministically by start_utc, then run_id
+    envelopes = [
+        parse_raw_envelope_dict(read_raw_envelope(file_path), source_path=file_path)
+        for file_path in raw_path.glob("*.json.gz")
+        if file_path.is_file()
+    ]
     envelopes.sort(key=lambda env: (env.start_utc, env.run_id))
     return envelopes

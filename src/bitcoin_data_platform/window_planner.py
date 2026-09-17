@@ -50,8 +50,7 @@ GRANULARITY_SECONDS: int = 3600
 MAX_CANDLES_PER_WINDOW: int = 300
 
 
-class SafetyLimitExceededError(TimeRangeError):
-    """Deprecated: safety limits were removed to enforce fixed planner invariants."""
+SafetyLimitExceededError = TimeRangeError
 
 
 @dataclass(frozen=True)

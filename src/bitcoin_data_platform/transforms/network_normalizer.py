@@ -1,7 +1,6 @@
 """Normalizer and deduplicator for Coin Metrics on-chain network metrics."""
 
 import gzip
-import hashlib
 import json
 import os
 import uuid
@@ -16,6 +15,7 @@ from bitcoin_data_platform.sources.coin_metrics_contract import (
     CoinMetricsRecord,
     validate_record,
 )
+from bitcoin_data_platform.storage.raw_writer import compute_payload_sha256
 from bitcoin_data_platform.time_range import parse_iso_utc
 
 NETWORK_SCHEMA_VERSION = 1
@@ -56,10 +56,7 @@ class NetworkRawEnvelope:
     payload: dict[str, Any] | list[Any]
 
 
-def compute_network_payload_sha256(payload: Any) -> str:
-    """Compute SHA-256 hex digest of a canonical JSON network payload."""
-    canonical_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(canonical_bytes).hexdigest()
+compute_network_payload_sha256 = compute_payload_sha256
 
 
 def create_network_raw_envelope(
@@ -187,18 +184,16 @@ def parse_network_raw_envelope_dict(
 def read_network_raw_envelopes(raw_dir: Path | str) -> list[NetworkRawEnvelope]:
     """Read all .json.gz network envelopes from raw_dir."""
     raw_path = Path(raw_dir)
-    if not raw_path.exists() or not raw_path.is_dir():
+    if not raw_path.is_dir():
         return []
 
     envelopes: list[NetworkRawEnvelope] = []
-    for file_path in raw_path.iterdir():
-        if not file_path.is_file() or not file_path.name.endswith(".json.gz"):
+    for file_path in raw_path.glob("*.json.gz"):
+        if not file_path.is_file():
             continue
         try:
-            compressed = file_path.read_bytes()
-            decompressed = gzip.decompress(compressed).decode("utf-8")
-            envelope_dict = json.loads(decompressed)
-            env = parse_network_raw_envelope_dict(envelope_dict, source_path=file_path)
+            decompressed = gzip.decompress(file_path.read_bytes()).decode("utf-8")
+            env = parse_network_raw_envelope_dict(json.loads(decompressed), source_path=file_path)
             envelopes.append(env)
         except Exception:
             continue
