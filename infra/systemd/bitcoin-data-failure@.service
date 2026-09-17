@@ -1,0 +1,29 @@
+[Unit]
+Description=Bitcoin Data Platform Failure Alert Handler for %I
+Documentation=https://github.com/Rifqi-Setiawan/bitcoin-data-platform
+
+[Service]
+Type=oneshot
+User=bitcoin-data
+Group=bitcoin-data
+EnvironmentFile=-/etc/bitcoin-data/bitcoin-data.env
+ExecStart=/srv/apps/services/bitcoin-data-platform/.venv/bin/bitcoin-data alert --failed-unit %I
+
+# Security & Sandboxing
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/srv/data/bitcoin-data-platform /tmp
+ReadOnlyPaths=/srv/apps/services/bitcoin-data-platform
+
+# Resource Limits
+MemoryMax=512M
+CPUQuota=50%
+
+# Logging
+StandardOutput=journal
+StandardError=journal

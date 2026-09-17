@@ -1,5 +1,8 @@
 """DuckDB manager for curated analytical views, pipeline watermark, run locking, and metadata."""
 
+import shutil
+import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -73,12 +76,18 @@ class DuckDBManager:
             requested_end_utc TIMESTAMPTZ,
             old_watermark_utc TIMESTAMPTZ,
             new_watermark_utc TIMESTAMPTZ,
-            error_message VARCHAR
+            error_message VARCHAR,
+            code_version VARCHAR,
+            source_row_count INTEGER,
+            valid_row_count INTEGER,
+            gap_count INTEGER,
+            raw_checksums VARCHAR,
+            error_class VARCHAR
         );
         """
         con.execute(sql)
 
-        # Handle schema migration for existing databases missing new Phase 3 columns
+        # Handle schema migration for existing databases missing columns
         existing_cols = {
             row[1] for row in con.execute("PRAGMA table_info('run_metadata');").fetchall()
         }
@@ -87,10 +96,117 @@ class DuckDBManager:
             ("requested_end_utc", "TIMESTAMPTZ"),
             ("old_watermark_utc", "TIMESTAMPTZ"),
             ("new_watermark_utc", "TIMESTAMPTZ"),
+            ("code_version", "VARCHAR"),
+            ("source_row_count", "INTEGER"),
+            ("valid_row_count", "INTEGER"),
+            ("gap_count", "INTEGER"),
+            ("raw_checksums", "VARCHAR"),
+            ("error_class", "VARCHAR"),
         ]
         for col_name, col_type in migration_cols:
             if col_name not in existing_cols:
                 con.execute(f"ALTER TABLE run_metadata ADD COLUMN {col_name} {col_type};")
+
+    def create_quality_checks_table(self) -> None:
+        """Create quality_check_results table if not exists."""
+        con = self.get_connection()
+        sql = """
+        CREATE TABLE IF NOT EXISTS quality_check_results (
+            check_id VARCHAR PRIMARY KEY,
+            run_id VARCHAR NOT NULL,
+            rule_name VARCHAR NOT NULL,
+            severity VARCHAR NOT NULL,  -- BLOCK, WARN, INFO
+            status VARCHAR NOT NULL,    -- PASSED, FAILED
+            metric_value DOUBLE,
+            threshold_value DOUBLE,
+            details VARCHAR,
+            evaluated_at_utc TIMESTAMPTZ NOT NULL
+        );
+        """
+        con.execute(sql)
+
+    def record_quality_checks(
+        self,
+        checks: Sequence[Any],
+    ) -> None:
+        """Record quality check results into quality_check_results table."""
+        if not checks:
+            return
+        con = self.get_connection()
+        self.create_quality_checks_table()
+        sql = """
+        INSERT OR REPLACE INTO quality_check_results (
+            check_id, run_id, rule_name, severity, status,
+            metric_value, threshold_value, details, evaluated_at_utc
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """
+        for c in checks:
+            check_id = str(getattr(c, "check_id", uuid.uuid4()))
+            run_id = str(getattr(c, "run_id", ""))
+            rule_name = str(getattr(c, "rule_name", ""))
+            severity = str(getattr(c, "severity", "INFO"))
+            status = str(getattr(c, "status", "PASSED"))
+            metric_val = getattr(c, "metric_value", None)
+            if metric_val is not None:
+                metric_val = float(metric_val)
+            thresh_val = getattr(c, "threshold_value", None)
+            if thresh_val is not None:
+                thresh_val = float(thresh_val)
+            details = getattr(c, "details", None)
+            if details is not None:
+                details = str(details)
+            eval_time = getattr(c, "evaluated_at_utc", None)
+            if eval_time is None:
+                eval_time = datetime.now(UTC)
+            elif eval_time.tzinfo is None:
+                eval_time = eval_time.replace(tzinfo=UTC)
+
+            con.execute(
+                sql,
+                [
+                    check_id,
+                    run_id,
+                    rule_name,
+                    severity,
+                    status,
+                    metric_val,
+                    thresh_val,
+                    details,
+                    eval_time,
+                ],
+            )
+
+    def get_recent_quality_checks(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Get latest quality check results."""
+        con = self.get_connection()
+        self.create_quality_checks_table()
+        try:
+            cursor = con.execute(
+                """
+                SELECT
+                    check_id,
+                    run_id,
+                    rule_name,
+                    severity,
+                    status,
+                    metric_value,
+                    threshold_value,
+                    details,
+                    STRFTIME(evaluated_at_utc, '%Y-%m-%dT%H:%M:%SZ') AS evaluated_at_utc
+                FROM quality_check_results
+                ORDER BY evaluated_at_utc DESC, check_id DESC
+                LIMIT ?;
+                """,
+                [limit],
+            )
+            desc = cursor.description
+            if desc is None:
+                return []
+            col_names = [d[0] for d in desc]
+            rows = cursor.fetchall()
+            return [dict(zip(col_names, row, strict=True)) for row in rows]
+        except Exception:
+            return []
 
     def create_watermark_table(self) -> None:
         """Create pipeline_watermark table if not exists."""
@@ -418,6 +534,7 @@ class DuckDBManager:
         """Initialize database schema, tables, and views."""
         self.create_metadata_table()
         self.create_watermark_table()
+        self.create_quality_checks_table()
         self.create_hourly_view()
         self.create_daily_mart_view()
 
@@ -648,8 +765,35 @@ class DuckDBManager:
                 )
         return gaps
 
+    def get_disk_usage(self) -> dict[str, Any]:
+        """Inspect filesystem disk usage for curated / data directory."""
+        target_path = self.curated_dir if self.curated_dir.exists() else Path(".")
+        try:
+            usage = shutil.disk_usage(target_path)
+            total_gb = round(usage.total / (1024**3), 2)
+            used_gb = round(usage.used / (1024**3), 2)
+            free_gb = round(usage.free / (1024**3), 2)
+            percent_used = round((usage.used / usage.total) * 100.0, 2) if usage.total > 0 else 0.0
+        except Exception:
+            total_gb = 0.0
+            used_gb = 0.0
+            free_gb = 0.0
+            percent_used = 0.0
+
+        disk_warning = percent_used > 70.0
+        disk_critical = percent_used > 80.0
+
+        return {
+            "total_gb": total_gb,
+            "used_gb": used_gb,
+            "free_gb": free_gb,
+            "percent_used": percent_used,
+            "disk_warning": disk_warning,
+            "disk_critical": disk_critical,
+        }
+
     def get_status(self, now_utc: datetime | None = None) -> dict[str, Any]:
-        """Compile comprehensive status dictionary as specified in Phase 3 spec."""
+        """Compile comprehensive status dictionary as specified in Phase 3 & 5 specs."""
         if now_utc is None:
             now_utc = datetime.now(UTC)
         elif now_utc.tzinfo is None:
@@ -673,6 +817,16 @@ class DuckDBManager:
         curated_stats = self.get_curated_stats()
         gaps = self.detect_gaps()
         is_locked = self.check_lock()
+        disk_stats = self.get_disk_usage()
+        recent_checks = self.get_recent_quality_checks(limit=10)
+
+        is_healthy = bool(
+            watermark_age_hours is not None
+            and watermark_age_hours <= 2.0
+            and len(gaps) == 0
+            and not disk_stats["disk_critical"]
+            and not is_locked
+        )
 
         return {
             "watermark_utc": watermark_str,
@@ -683,6 +837,10 @@ class DuckDBManager:
             "curated_stats": curated_stats,
             "gaps": gaps,
             "is_locked": is_locked,
+            "disk": disk_stats,
+            "disk_usage": disk_stats,
+            "is_healthy": is_healthy,
+            "quality_checks": recent_checks,
         }
 
     def execute_query(self, sql: str) -> list[dict[str, Any]]:

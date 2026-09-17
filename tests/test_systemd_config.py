@@ -184,6 +184,33 @@ class TestSystemdTimerConfig:
         )
         assert "Normalized form:" in result.stdout
 
+    def test_service_on_failure_directive(self) -> None:
+        service_path = _repo_root() / "infra" / "systemd" / "bitcoin-data.service"
+        parser = _parse_ini(service_path)
+        unit = parser["Unit"]
+        assert unit.get("OnFailure") == "bitcoin-data-failure@%n.service"
+
+
+class TestSystemdFailureServiceConfig:
+    """Tests for infra/systemd/bitcoin-data-failure@.service."""
+
+    def test_failure_service_exists(self) -> None:
+        service_path = _repo_root() / "infra" / "systemd" / "bitcoin-data-failure@.service"
+        assert service_path.is_file(), f"Failure service file not found at {service_path}"
+        assert service_path.stat().st_size > 0, "Failure service file is empty"
+
+    def test_failure_service_configuration(self) -> None:
+        service_path = _repo_root() / "infra" / "systemd" / "bitcoin-data-failure@.service"
+        parser = _parse_ini(service_path)
+        assert "Unit" in parser.sections()
+        assert "Service" in parser.sections()
+
+        service = parser["Service"]
+        assert service.get("Type") == "oneshot"
+        assert service.get("User") == "bitcoin-data"
+        exec_start = service.get("ExecStart", "")
+        assert "bitcoin-data alert --failed-unit %I" in exec_start
+
 
 class TestSystemdEnvironmentConfig:
     """Tests for infra/systemd/bitcoin-data.env.example."""

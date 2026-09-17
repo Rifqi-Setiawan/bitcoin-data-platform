@@ -3,6 +3,7 @@ Description=Bitcoin Data Engineering Platform - Incremental Ingestion & Promotio
 Documentation=https://github.com/Rifqi-Setiawan/bitcoin-data-platform
 After=network-online.target
 Wants=network-online.target
+OnFailure=bitcoin-data-failure@%n.service
 
 [Service]
 Type=oneshot
