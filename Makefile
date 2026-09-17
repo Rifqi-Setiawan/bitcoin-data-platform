@@ -17,8 +17,8 @@ help:
 	@echo "  clean      - Remove temporary and cache files"
 
 install:
-	uv pip install --python $(PYTHON) -r requirements-dev.txt
-	uv pip install --python $(PYTHON) -e .
+	$(PYTHON) -m pip install -r requirements-dev.txt
+	$(PYTHON) -m pip install -e .
 
 lint:
 	$(RUFF) check .
