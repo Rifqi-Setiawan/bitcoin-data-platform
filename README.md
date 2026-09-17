@@ -283,6 +283,17 @@ bitcoin-data repair \
 - `5`: Storage failure (disk, Parquet, or database write failure).
 - `6`: Concurrent run detected (run lock actively held).
 
+## Production Deployment & Scheduling (systemd)
+
+Phase 4 operationalizes the pipeline on a single-host Linux VPS using native `systemd` service and timer units:
+
+- **Timer Unit (`infra/systemd/bitcoin-data.timer`):** Triggers incremental ingestion hourly at 10 minutes past the hour (`OnCalendar=*-*-* *:10:00`) with randomized jitter (`RandomizedDelaySec=120`) and catch-up on reboot (`Persistent=true`).
+- **Service Unit (`infra/systemd/bitcoin-data.service`):** Executes `bitcoin-data incremental` as a supervised `oneshot` service under a dedicated unprivileged `bitcoin-data` system account.
+- **Security & Sandboxing:** Hardened with `ProtectSystem=strict`, `NoNewPrivileges=true`, `PrivateTmp=true`, `ProtectHome=true`, resource limits (`MemoryMax=1G`, `CPUQuota=100%`), and filesystem write boundaries confined strictly to `/srv/data/bitcoin-data-platform` and `/tmp`.
+- **Structured Journald Logging:** Streams JSON logs directly to systemd's journal.
+
+For step-by-step user provisioning, permission setup, unit installation, failure recovery, and rollback instructions, see the **[Deployment & Operations Runbook](docs/runbooks/DEPLOYMENT_RUNBOOK.md)**.
+
 ## Quality gates
 
 Run the documented quality gates:
@@ -308,6 +319,9 @@ make test       # pytest test suite
 - [Phase 1B Specification](docs/specs/PHASE_1B_COINBASE_CLIENT_RAW_INGESTION.md)
 - [Phase 2 Specification](docs/specs/PHASE_2_CURATED_PARQUET_DUCKDB.md)
 - [Phase 3 Specification](docs/specs/PHASE_3_INCREMENTAL_WATERMARK.md)
+- [Phase 4 Specification](docs/specs/PHASE_4_SINGLE_HOST_ORCHESTRATION.md)
+- [Operational Runbook (Phase 3)](docs/runbooks/OPERATIONAL_RUNBOOK.md)
+- [Deployment Runbook (Phase 4)](docs/runbooks/DEPLOYMENT_RUNBOOK.md)
 - [Data Engineering concept map](docs/learning/DE_CONCEPT_MAP.md)
 - [Source evaluation](docs/sources/SOURCE_EVALUATION.md)
 - [Hermes implementation workflow](docs/IMPLEMENTATION_WORKFLOW.md)
