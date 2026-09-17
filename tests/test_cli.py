@@ -137,6 +137,66 @@ def test_cli_normalizes_z_and_plus_zero_to_identical_output(
             "the following arguments are required: --end",
         ),
         (
+            [
+                "plan-backfill",
+                "--start",
+                "2026-01-01T00:00:00-00:00",
+                "--end",
+                "2026-01-02T00:00:00Z",
+            ],
+            "explicit UTC",
+        ),
+        (
+            [
+                "plan-backfill",
+                "--start",
+                "2026-01-01T00:00:00+0000",
+                "--end",
+                "2026-01-02T00:00:00Z",
+            ],
+            "explicit UTC",
+        ),
+        (
+            [
+                "plan-backfill",
+                "--start",
+                "2026-01-01T00:00:00+00",
+                "--end",
+                "2026-01-02T00:00:00Z",
+            ],
+            "explicit UTC",
+        ),
+        (
+            [
+                "plan-backfill",
+                "--start",
+                "2026-01-01T00:00:00Z",
+                "--end",
+                "2026-01-02T00:00:00-00:00",
+            ],
+            "explicit UTC",
+        ),
+        (
+            [
+                "plan-backfill",
+                "--start",
+                "2026-01-01T00:00:00Z",
+                "--end",
+                "2026-01-02T00:00:00+0000",
+            ],
+            "explicit UTC",
+        ),
+        (
+            [
+                "plan-backfill",
+                "--start",
+                "2026-01-01T00:00:00Z",
+                "--end",
+                "2026-01-02T00:00:00+00",
+            ],
+            "explicit UTC",
+        ),
+        (
             ["plan-backfill", "--start", "2026-01-01T00:00:00", "--end", "2026-01-02T00:00:00Z"],
             "explicit UTC",
         ),

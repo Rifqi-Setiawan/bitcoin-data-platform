@@ -257,4 +257,3 @@ Hermes must return:
 - intentionally deferred Phase 1B work;
 - commit hash;
 - confirmation that no network request, infrastructure change, or secret was introduced.
-

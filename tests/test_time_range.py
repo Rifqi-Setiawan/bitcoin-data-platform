@@ -31,6 +31,26 @@ def test_parse_iso_utc_with_plus_zero_offset() -> None:
     assert dt.utcoffset() == timedelta(0)
 
 
+@pytest.mark.parametrize(
+    "rejected_utc_spelling",
+    [
+        "2026-01-01T00:00:00-00:00",
+        "2026-01-01T00:00:00+0000",
+        "2026-01-01T00:00:00+00",
+        "2026-01-01T00:00:00-0000",
+        "2026-01-01T00:00:00-00",
+    ],
+)
+def test_rejects_disallowed_zero_offset_spellings(rejected_utc_spelling: str) -> None:
+    with pytest.raises(InvalidTimezoneError, match="explicit UTC"):
+        parse_iso_utc(rejected_utc_spelling, "--start")
+
+
+def test_rejects_lowercase_z_spelling() -> None:
+    with pytest.raises(MalformedTimestampError, match="Invalid ISO-8601"):
+        parse_iso_utc("2026-01-01T00:00:00z", "--start")
+
+
 def test_format_canonical_utc_normalizes_to_z() -> None:
     dt_z = parse_iso_utc("2026-01-01T00:00:00Z", "--start")
     dt_offset = parse_iso_utc("2026-01-01T00:00:00+00:00", "--start")
@@ -125,7 +145,7 @@ def test_leap_year_feb_29_continuous_and_correctly_counted() -> None:
     # 2024 is a leap year: Feb 28 00:00Z to Mar 01 00:00Z is 48 hours
     start = datetime(2024, 2, 28, 0, 0, 0, tzinfo=UTC)
     end = datetime(2024, 3, 1, 0, 0, 0, tzinfo=UTC)
-    validate_half_open_interval(start, end, allow_open_candle=True)
+    validate_half_open_interval(start, end, now_utc=end)
     tr = TimeRange(start_utc=start, end_utc=end)
     assert tr.total_hours == 48
 
@@ -157,6 +177,6 @@ def test_dst_transition_unchanged_in_utc() -> None:
     # US spring forward transition date: 2024-03-10
     start = datetime(2024, 3, 10, 0, 0, 0, tzinfo=UTC)
     end = datetime(2024, 3, 11, 0, 0, 0, tzinfo=UTC)
-    validate_half_open_interval(start, end, allow_open_candle=True)
+    validate_half_open_interval(start, end, now_utc=end)
     tr = TimeRange(start_utc=start, end_utc=end)
     assert tr.total_hours == 24
