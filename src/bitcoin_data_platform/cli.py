@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from bitcoin_data_platform.infra import dispatch_failure_alert
+from bitcoin_data_platform.lakehouse.cli import handle_lakehouse_cli, register_lakehouse_cli
 from bitcoin_data_platform.quality import run_dataset_quality_checks
 from bitcoin_data_platform.quality.checks import QualityCheckError
 from bitcoin_data_platform.serving import (
@@ -766,6 +767,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Perform post-capture reconciliation against Coinbase REST reference candles.",
     )
 
+    register_lakehouse_cli(subparsers)
+
     return parser
 
 
@@ -1507,6 +1510,9 @@ def main(
             _log_event("error", "streaming_session_failed", error=str(exc))
             sys.stderr.write(f"error: streaming session failed: {exc}\n")
             return 1
+
+    if args.command == "lakehouse":
+        return handle_lakehouse_cli(args)
 
     sys.stderr.write(f"error: unrecognized command: {args.command}\n")
     return 2

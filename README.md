@@ -475,6 +475,59 @@ Each run generates an isolated artifact directory under `<output-dir>/runs/<run_
 └── reports/summary.json        # Latency percentiles (p50/p95/p99), loss metrics, reconciliation deltas
 ```
 
+## Phase 10: Lakehouse and Distributed Compute Evolution
+
+Phase 10 implements an evidence-led, zero-daemon transactional Lakehouse table engine in `src/bitcoin_data_platform/lakehouse/`:
+- **SQLite Transactional Metadata Catalog (`lakehouse/catalog.py`)**:
+  - Embedded zero-daemon catalog in `platform_catalog.sqlite` operating with WAL mode and optimistic concurrency control (OCC).
+  - Tracks table namespaces, monotonic snapshot IDs, parent commit lineage, and active manifest files.
+- **Multi-Asset Analytical Table (`lakehouse/table.py` & `lakehouse/writer.py`)**:
+  - Native multi-asset partitioning supporting `BTC-USD`, `ETH-USD`, and other trading pairs in Hive-style directories (`product_id=BTC-USD/`).
+  - High-precision decimal columns (`Decimal128(38, 18)`) for prices and sizes with timezone-aware UTC timestamps.
+  - Non-blocking concurrent reads: readers always access an immutable snapshot state while active writes commit new snapshots atomically.
+- **Bin-Packing Compaction Engine (`lakehouse/compaction.py`)**:
+  - Solves the small-file fragmentation problem from real-time streaming micro-batches (Phase 9).
+  - Deterministically bin-packs and merges files below target size (default 128 MiB) per partition into optimal columnar files without data loss or value mutation.
+- **Historical Time-Travel Querying (`lakehouse/table.py`)**:
+  - Direct as-of querying by snapshot ID (`table.read_snapshot(id)`) or historical UTC timestamp (`table.read_as_of(time)`).
+  - In-memory DuckDB integration (`table.to_duckdb()` / `table.query()`) for high-performance SQL analytical backtesting.
+- **Snapshot Retention & Safe Vacuum (`lakehouse/retention.py`)**:
+  - Metadata expiration for obsolete snapshots while strictly protecting branch heads.
+  - Safe garbage collection of unreferenced orphan Parquet files with retention window safety guards.
+
+### Lakehouse CLI Subcommands
+
+```bash
+# 1. Initialize a multi-asset Lakehouse table
+bitcoin-data lakehouse init \
+  --table trades \
+  --catalog-dir ./data/lakehouse/catalog
+
+# 2. Transactionally append a batch of trades
+bitcoin-data lakehouse write \
+  --table trades \
+  --input-file data/raw/streaming/events/part-001.jsonl \
+  --catalog-dir ./data/lakehouse/catalog
+
+# 3. Compact fragmented micro-batches per partition
+bitcoin-data lakehouse compact \
+  --table trades \
+  --target-size-mb 128 \
+  --catalog-dir ./data/lakehouse/catalog
+
+# 4. Query historical dataset state as of a snapshot or timestamp
+bitcoin-data lakehouse time-travel \
+  --table trades \
+  --as-of-snapshot 2 \
+  --catalog-dir ./data/lakehouse/catalog
+
+# 5. Purge unreferenced orphan files and expire historical snapshots
+bitcoin-data lakehouse vacuum \
+  --table trades \
+  --retain-days 7 \
+  --catalog-dir ./data/lakehouse/catalog
+```
+
 ## Quality gates
 
 Run the documented quality gates:
@@ -511,10 +564,12 @@ make clean-dist # remove build and packaging artifacts
 - [Phase 7 Specification](docs/specs/PHASE_7_SECOND_DOMAIN_CONFORMED_MODELING.md)
 - [Phase 8 Specification](docs/specs/PHASE_8_RESEARCH_SERVING_LAYER.md)
 - [Phase 9 Specification](docs/specs/PHASE_9_WEBSOCKET_STREAMING.md)
+- [Phase 10 Specification](docs/specs/PHASE_10_LAKEHOUSE_EVOLUTION.md)
 - [Official Data Dictionary](docs/data_dictionary/DATA_DICTIONARY.md)
 - [ADR D-008: Container Evaluation](docs/decisions/D-008_CONTAINER_EVALUATION.md)
 - [ADR D-009: dbt-core Evaluation](docs/decisions/D-009_DBT_EVALUATION.md)
 - [ADR D-010: Streaming Experiment](docs/decisions/D-010_STREAMING_EXPERIMENT.md)
+- [ADR D-011: Lakehouse Evolution](docs/decisions/D-011_LAKEHOUSE_EVOLUTION.md)
 - [Operational Runbook (Phase 3)](docs/runbooks/OPERATIONAL_RUNBOOK.md)
 - [Deployment Runbook (Phase 4)](docs/runbooks/DEPLOYMENT_RUNBOOK.md)
 - [Data Quality Runbook (Phase 5)](docs/runbooks/DATA_QUALITY_RUNBOOK.md)

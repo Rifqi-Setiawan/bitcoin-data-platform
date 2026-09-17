@@ -81,3 +81,11 @@ This log is intentionally lightweight. Promote a decision to a numbered ADR when
 - **Alternatives:** Apache Kafka/Redpanda cluster, Redis Streams, direct write into batch Parquet partitions.
 - **Trade-offs:** Volatile uncommitted events lost on abrupt process termination; raw JSON Lines consume uncompressed disk space during experiment.
 - **Reconsider when:** Low-latency streaming is required continuously in production or cross-venue trade consolidation becomes necessary. (See `D-010_STREAMING_EXPERIMENT.md` for full evaluation).
+
+## D-011 — Conditional Local Lakehouse Engine with Evidence-Gated Distributed Compute
+
+- **Decision:** Implement a lightweight, zero-daemon transactional Lakehouse engine in `src/bitcoin_data_platform/lakehouse/` governed by an embedded SQLite metadata catalog (`platform_catalog.sqlite`), bin-packing compaction, snapshot time-travel, and Apache Parquet columnar storage.
+- **Reason:** Solves single-writer locking constraints of embedded DuckDB, eliminates small-file degradation from streaming ingestion via deterministic compaction, enables reproducible as-of time-travel queries, and provides multi-asset scaling (`BTC-USD`, `ETH-USD`) without JVM daemon bloat (rejecting Spark/Trino).
+- **Alternatives:** Apache Iceberg with Nessie / AWS Glue catalog, Delta Lake Standalone, Apache Spark / Trino cluster.
+- **Trade-offs:** Snapshot metadata history consumes SQLite disk space until vacuumed; slight write latency overhead for ACID transaction commits.
+- **Reconsider when:** Dataset volume crosses 100M rows on distributed object storage or multi-node distributed compute becomes cost-effective. (See `D-011_LAKEHOUSE_EVOLUTION.md` for full evaluation).
