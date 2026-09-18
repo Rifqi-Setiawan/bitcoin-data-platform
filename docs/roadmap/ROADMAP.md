@@ -183,6 +183,18 @@ Each phase solves the next observed problem. A phase is complete only when its o
 - **Definition of done:** All 3 strategies benchmarked; CLI `bitcoin-data backtest` operational; quantitative metrics mathematically verified; Jupyter notebook committed and reproducible; 100% test pass rate with zero regression across all phases.
 - **Interview outcome:** Defend why Dynamic Reserve DCA outperforms naive DCA and Buy & Hold in drawdown protection, explain the mathematical difference between Sharpe and Sortino ratios in asymmetric return distributions, and demonstrate how to design an event-driven backtester free from lookahead bias.
 
+## Phase 15 — Forward paper trading engine ($1,000 virtual capital) & Fincept-style web dashboard integration
+
+- **Objective:** Implement a forward-testing Paper Trading Simulation Engine initialized with $1,000.00 USD virtual capital and integrate an institutional Fincept Terminal-style Portfolio Tracker into the existing Bitcoin Market Hub Web UI dashboard.
+- **Prerequisites:** Phase 12 conformed mart `mart_btc_investment_signals_daily`, Phase 13 investment signal generator, and Phase 14 `DynamicReserveDCAStrategy` logic.
+- **Components:** `PaperTradingEngine` (`paper/engine.py`), `RiskGuard` (`paper/risk_guard.py`), `models.py` (`PaperPortfolioBalance`, `PaperTradeRecord`, `PaperSnapshotRecord`, `PaperSummary`), DuckDB tables `paper_portfolio_balance`, `paper_portfolio_snapshots_daily`, `paper_trade_ledger`, Dashboard server REST endpoints `/api/portfolio`, `/api/portfolio/equity`, `/api/portfolio/trades`, Fincept Terminal UI tab in `dashboard/assets/index.html`, CLI subcommand `paper` (`init`, `step`, `status`, `reset`).
+- **Concepts:** Forward paper trading, AutoHedge-inspired pre-trade risk gatekeeper (`RiskGuard`), filesystem emergency kill-switch (`data/state/PAPER_KILL_SWITCH`), solvency and 20% price deviation validation, dual-entry shadow accounting (70% Base Cash / 30% Tactical Reserve Cash), simulated 10 bps Coinbase Spot fee deduction, mark-to-market daily snapshots vs $1,000 Buy & Hold benchmark, institutional order blotter, Fincept Terminal dark UI.
+- **Expected output:** Deterministic daily forward DCA order execution, real-time portfolio metrics, Chart.js dual-curve equity tracking vs Buy & Hold benchmark, asset allocation donut chart, interactive order blotter, CLI and REST API access with fallback resilience.
+- **Tests:** Model contracts & serialization, pre-trade risk guard rules (kill switch, deviation, solvency, macro event policy), step execution across all 5 regimes, fee deduction, benchmark equity calculation, REST endpoints with fallback and populated states, CLI subcommands (39 new tests, 665 total tests, 100% pass).
+- **Portfolio value:** Bridges historical quantitative backtesting and autonomous live execution by providing empirical out-of-sample forward paper trading validation with transparent web observability and capital safety guards.
+- **Definition of done:** All CLI `bitcoin-data paper` subcommands operational; DuckDB relational schema initialized; `/api/portfolio*` endpoints live; Web UI features Fincept Terminal tab with dual-curve performance charts and order blotter; full test suite and quality gates passing with zero regressions.
+- **Interview outcome:** Explain how forward paper trading prevents model overfitting, how pre-trade risk gatekeepers enforce institutional capital preservation before live execution, and how to design dual-pool cash allocation architectures.
+
 ## Stage gates
 
 Do not advance merely because a phase is interesting. At each gate ask:

@@ -921,6 +921,54 @@ class DuckDBManager:
             [alert_id],
         )
 
+    def create_paper_portfolio_tables(self) -> None:
+        """Create forward paper trading portfolio tables if not exist."""
+        con = self.get_connection()
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS paper_portfolio_balance (
+                portfolio_id VARCHAR PRIMARY KEY,
+                initial_cash DOUBLE NOT NULL,
+                base_cash DOUBLE NOT NULL,
+                reserve_cash DOUBLE NOT NULL,
+                btc_balance DOUBLE NOT NULL,
+                total_contributed DOUBLE NOT NULL,
+                last_updated_utc TIMESTAMPTZ NOT NULL,
+                total_trades INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS paper_portfolio_snapshots_daily (
+                snapshot_date DATE NOT NULL,
+                portfolio_id VARCHAR NOT NULL,
+                base_cash DOUBLE NOT NULL,
+                reserve_cash DOUBLE NOT NULL,
+                total_cash DOUBLE NOT NULL,
+                btc_balance DOUBLE NOT NULL,
+                btc_price DOUBLE NOT NULL,
+                portfolio_equity DOUBLE NOT NULL,
+                unrealized_pnl_usd DOUBLE NOT NULL,
+                unrealized_pnl_pct DOUBLE NOT NULL,
+                benchmark_equity DOUBLE NOT NULL,
+                PRIMARY KEY (snapshot_date, portfolio_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS paper_trade_ledger (
+                trade_id VARCHAR PRIMARY KEY,
+                portfolio_id VARCHAR NOT NULL,
+                executed_at_utc TIMESTAMPTZ NOT NULL,
+                trade_date DATE NOT NULL,
+                side VARCHAR NOT NULL,
+                signal_regime VARCHAR NOT NULL,
+                spot_price DOUBLE NOT NULL,
+                gross_amount_usd DOUBLE NOT NULL,
+                fee_usd DOUBLE NOT NULL,
+                net_amount_usd DOUBLE NOT NULL,
+                btc_amount DOUBLE NOT NULL,
+                narrative VARCHAR NOT NULL
+            );
+            """
+        )
+
     def initialize(self) -> None:
         """Initialize database schema, tables, and views."""
         self.create_metadata_table()
@@ -930,6 +978,7 @@ class DuckDBManager:
         self.create_macro_events_table()
         self.create_signal_history_table()
         self.create_news_sentinel_alerts_table()
+        self.create_paper_portfolio_tables()
         self.create_hourly_view()
         self.create_daily_mart_view()
         self.create_network_fact_view()
