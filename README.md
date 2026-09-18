@@ -598,6 +598,36 @@ bitcoin-data send-alert --type signal --dry-run
 bitcoin-data send-alert --type news --dry-run
 ```
 
+### Quantitative Backtest & Validation Engine (Phase 14)
+
+Phase 14 delivers an institutional-grade, event-driven backtesting and quantitative validation engine (`src/bitcoin_data_platform/backtest/`) to simulate systematic investment strategies across multi-year market cycles without lookahead bias:
+1. **Dynamic Reserve DCA + Macro Regime Overlay**: 70% Base DCA Pool + 30% Tactical Reserve Pool with dynamic accumulation multipliers (0.0x to 2.0x + 25% tactical reserve draw) driven by Mayer Multiple, MVRV, Fear & Greed sentiment, and high-impact macro circuit breakers.
+2. **Blind DCA**: Naive periodic dollar-cost averaging executed unconditionally on schedule.
+3. **Lump Sum Buy & Hold**: 100% initial capital deployed at inception ($T_0$) with zero subsequent contributions.
+4. **Institutional Metrics**: Total Return (%), CAGR (365-day basis), Maximum Drawdown (MDD %), continuous annualized Sharpe Ratio, Sortino Ratio (downside semivariance), Calmar Ratio, and BTC Acquisition Cost Discount (%).
+
+```bash
+# 1. Benchmark all three strategies side-by-side (ASCII table)
+bitcoin-data backtest
+
+# 2. Run simulation over specific historical date range with weekly DCA injections
+bitcoin-data backtest \
+  --start 2024-01-01 \
+  --end 2026-01-01 \
+  --frequency weekly \
+  --periodic-amount 250.0
+
+# 3. Simulate single strategy and output as JSON
+bitcoin-data backtest \
+  --strategy dynamic-reserve \
+  --format json
+
+# 4. Generate GitHub-flavored Markdown benchmark report to file
+bitcoin-data backtest \
+  --format markdown \
+  --output ./reports/backtest_benchmark.md
+```
+
 ### Web UI Dashboard & API Server
 
 The platform includes a zero-dependency, lightweight web dashboard ("Bitcoin Market Hub") served using Python's standard library `ThreadingHTTPServer` (`src/bitcoin_data_platform/dashboard/`).
@@ -662,6 +692,8 @@ make clean-dist # remove build and packaging artifacts
 - [Phase 10 Specification](docs/specs/PHASE_10_LAKEHOUSE_EVOLUTION.md)
 - [Phase 11 Specification](docs/specs/PHASE_11_OPERATIONAL_DIAGNOSTICS.md)
 - [Phase 12 Specification](docs/specs/PHASE_12_INVESTMENT_DATA_EXPANSION.md)
+- [Phase 13 Specification](docs/specs/PHASE_13_INVESTMENT_SIGNAL_ENGINE.md)
+- [Phase 14 Specification](docs/specs/PHASE_14_BACKTEST_VALIDATION.md)
 - [Official Data Dictionary](docs/data_dictionary/DATA_DICTIONARY.md)
 - [ADR D-008: Container Evaluation](docs/decisions/D-008_CONTAINER_EVALUATION.md)
 - [ADR D-009: dbt-core Evaluation](docs/decisions/D-009_DBT_EVALUATION.md)

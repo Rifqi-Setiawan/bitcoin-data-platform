@@ -13,6 +13,18 @@ from pathlib import Path
 from typing import Any
 
 from bitcoin_data_platform.alerts.telegram_dispatcher import TelegramDispatcher
+from bitcoin_data_platform.backtest.engine import BacktestEngine
+from bitcoin_data_platform.backtest.models import (
+    BacktestConfig,
+    BenchmarkSummary,
+    FrequencyType,
+    StrategyType,
+)
+from bitcoin_data_platform.backtest.reporter import (
+    format_json,
+    format_markdown,
+    format_table,
+)
 from bitcoin_data_platform.diagnostics.cli import (
     handle_diagnostics_cli,
     register_diagnostics_cli,
@@ -942,6 +954,71 @@ def build_parser() -> argparse.ArgumentParser:
         help="Telegram chat ID (or env TELEGRAM_CHAT_ID).",
     )
 
+    # 20. backtest command
+    backtest_parser = subparsers.add_parser(
+        "backtest",
+        parents=[base_db_parser],
+        help="Run event-driven backtesting and quantitative benchmarking.",
+        description=(
+            "Simulate and benchmark systematic investment strategies (Lump Sum, "
+            "Blind DCA, Dynamic Reserve DCA) across historical market cycles."
+        ),
+    )
+    backtest_parser.add_argument(
+        "--strategy",
+        choices=["all", "dynamic-reserve", "blind-dca", "lump-sum"],
+        default="all",
+        help="Strategy to simulate (default: all).",
+    )
+    backtest_parser.add_argument(
+        "--start",
+        type=str,
+        default=None,
+        help="Start date YYYY-MM-DD (default: earliest available).",
+    )
+    backtest_parser.add_argument(
+        "--end",
+        type=str,
+        default=None,
+        help="End date YYYY-MM-DD (default: latest available).",
+    )
+    backtest_parser.add_argument(
+        "--initial-cash",
+        type=float,
+        default=10000.0,
+        help="Initial fiat cash allocation for Lump Sum (default: 10000.0).",
+    )
+    backtest_parser.add_argument(
+        "--periodic-amount",
+        type=float,
+        default=100.0,
+        help="Periodic contribution amount for DCA strategies (default: 100.0).",
+    )
+    backtest_parser.add_argument(
+        "--frequency",
+        choices=["daily", "weekly"],
+        default="daily",
+        help="Contribution injection frequency (default: daily).",
+    )
+    backtest_parser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=10.0,
+        help="Trading transaction fee in basis points (default: 10.0 = 0.10%%).",
+    )
+    backtest_parser.add_argument(
+        "--format",
+        choices=["table", "json", "markdown"],
+        default="table",
+        help="Output presentation format (default: table).",
+    )
+    backtest_parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Optional output file path to write the report.",
+    )
+
     return parser
 
 
@@ -957,6 +1034,7 @@ def main(
     signal_generator: SignalGenerator | None = None,
     news_sentinel: NewsSentinel | None = None,
     telegram_dispatcher: TelegramDispatcher | None = None,
+    backtest_engine: BacktestEngine | None = None,
 ) -> int:
     parser = build_parser()
     if argv is None:
@@ -1993,6 +2071,119 @@ def main(
                 if success and not args.dry_run:
                     db_manager.mark_news_alert_sent(alert.alert_id)
             return 0
+
+    if args.command == "backtest":
+        start_date: date | None = None
+        end_date: date | None = None
+
+        if args.start:
+            try:
+                start_date = date.fromisoformat(args.start)
+            except ValueError:
+                sys.stderr.write(
+                    f"error: invalid --start date '{args.start}', expected YYYY-MM-DD\n"
+                )
+                return 2
+
+        if args.end:
+            try:
+                end_date = date.fromisoformat(args.end)
+            except ValueError:
+                sys.stderr.write(f"error: invalid --end date '{args.end}', expected YYYY-MM-DD\n")
+                return 2
+
+        if start_date and end_date and start_date > end_date:
+            sys.stderr.write(
+                f"error: --start date ({start_date}) cannot be after --end date ({end_date})\n"
+            )
+            return 2
+
+        if args.initial_cash < 0.0:
+            sys.stderr.write("error: --initial-cash must be >= 0.0\n")
+            return 2
+
+        if args.periodic_amount < 0.0:
+            sys.stderr.write("error: --periodic-amount must be >= 0.0\n")
+            return 2
+
+        if args.fee_bps < 0.0:
+            sys.stderr.write("error: --fee-bps must be >= 0.0\n")
+            return 2
+
+        db_path = Path(args.db_path)
+        if not db_path.exists():
+            sys.stderr.write(f"error: database file not found at {db_path}\n")
+            return 2
+
+        # Ensure view exists if writable
+        try:
+            with DuckDBManager(db_path=db_path) as db_manager:
+                db_manager.create_investment_signals_view()
+        except Exception:
+            pass  # Read-only or table already exists
+
+        engine = backtest_engine or BacktestEngine()
+        try:
+            backtest_records = engine.load_data_from_duckdb(
+                db_path=db_path,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except Exception as exc:
+            sys.stderr.write(f"error: failed to load backtest data: {exc}\n")
+            return 2
+
+        if not backtest_records:
+            sys.stderr.write(
+                "error: no backtest data found in mart_btc_investment_signals_daily "
+                "for the specified date range\n"
+            )
+            return 2
+
+        freq = FrequencyType.from_str(args.frequency)
+        config = BacktestConfig(
+            start_date=start_date,
+            end_date=end_date,
+            initial_cash=args.initial_cash,
+            periodic_amount=args.periodic_amount,
+            frequency=freq,
+            fee_bps=args.fee_bps,
+        )
+
+        if args.strategy == "all":
+            backtest_summary = engine.run_benchmark(records=backtest_records, config=config)
+        else:
+            strat_type = StrategyType.from_str(args.strategy)
+            single_res = engine.run_strategy(
+                records=backtest_records,
+                strategy_type=strat_type,
+                config=config,
+            )
+            backtest_summary = BenchmarkSummary(
+                start_date=backtest_records[0].trade_date,
+                end_date=backtest_records[-1].trade_date,
+                duration_days=(
+                    backtest_records[-1].trade_date - backtest_records[0].trade_date
+                ).days
+                + 1,
+                results={strat_type: single_res},
+            )
+
+        if args.format == "json":
+            output_text = format_json(backtest_summary)
+        elif args.format == "markdown":
+            output_text = format_markdown(backtest_summary)
+        else:
+            output_text = format_table(backtest_summary)
+
+        if args.output:
+            out_file = Path(args.output)
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(output_text + "\n", encoding="utf-8")
+        else:
+            sys.stdout.write(output_text + "\n")
+
+        return 0
 
     sys.stderr.write(f"error: unrecognized command: {args.command}\n")
     return 2

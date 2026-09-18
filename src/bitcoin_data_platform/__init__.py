@@ -5,6 +5,22 @@ from bitcoin_data_platform.alerts.telegram_dispatcher import (
     format_news_alert_message,
     format_signal_message,
 )
+from bitcoin_data_platform.backtest.engine import BacktestEngine
+from bitcoin_data_platform.backtest.models import (
+    BacktestConfig,
+    BacktestDayRecord,
+    BenchmarkSummary,
+    DailyPortfolioState,
+    FrequencyType,
+    StrategyResult,
+    StrategyType,
+)
+from bitcoin_data_platform.backtest.strategies import (
+    BaseStrategy,
+    BlindDCAStrategy,
+    DynamicReserveDCAStrategy,
+    LumpSumStrategy,
+)
 from bitcoin_data_platform.quality.checks import (
     QualityCheckError,
     check_candle,
@@ -98,18 +114,28 @@ __version__ = "0.1.0"
 
 __all__ = [
     "BackfillPlan",
+    "BacktestConfig",
+    "BacktestDayRecord",
+    "BacktestEngine",
+    "BaseStrategy",
+    "BenchmarkSummary",
+    "BlindDCAStrategy",
     "CoinbaseCandle",
     "CoinbaseClient",
     "CoinbaseClientError",
     "CoinbaseHTTPError",
     "CoinbaseResponse",
     "ContractViolationError",
+    "DailyPortfolioState",
     "DuckDBManager",
     "DuckDBManagerError",
+    "DynamicReserveDCAStrategy",
     "ENDPOINT_NAME",
+    "FrequencyType",
     "InvalidIntervalError",
     "InvalidTimezoneError",
     "InvestmentSignal",
+    "LumpSumStrategy",
     "MalformedTimestampError",
     "MisalignedBoundaryError",
     "NewsAlert",
@@ -130,6 +156,8 @@ __all__ = [
     "SignalGenerator",
     "SourceUnavailableError",
     "StorageError",
+    "StrategyResult",
+    "StrategyType",
     "TelegramDispatcher",
     "TimeRange",
     "TimeRangeError",

@@ -171,6 +171,18 @@ Each phase solves the next observed problem. A phase is complete only when its o
 - **Definition of done:** All CLI subcommands operational; DuckDB audit tables populated; Telegram notifications delivered in dry-run and live modes; zero API credentials leaked; full test suite and quality gates passing.
 - **Interview outcome:** Explain how rule-based signal consensus eliminates hallucination risk, how event-driven news monitoring provides defensive circuit breakers, and how to build secure notification channels with zero external framework dependencies.
 
+## Phase 14 — Backtest & validation engine: historical simulation & quantitative benchmarking
+
+- **Objective:** Build an institutional-grade, event-driven backtesting and quantitative validation engine that simulates systematic Bitcoin investment strategies—benchmarking Dynamic Reserve DCA against Blind DCA and Lump Sum Buy & Hold across complete market cycles without lookahead bias.
+- **Prerequisites:** Phase 12 conformed mart `mart_btc_investment_signals_daily` and Phase 13 rule-based investment signals.
+- **Components:** `BacktestEngine` (`backtest/engine.py`), strategies `BaseStrategy`, `LumpSumStrategy`, `BlindDCAStrategy`, `DynamicReserveDCAStrategy` (`backtest/strategies.py`), quantitative metrics calculator (`backtest/metrics.py`), formatters `format_table`, `format_markdown`, `format_json` (`backtest/reporter.py`), CLI subcommand `backtest`, research notebook `notebooks/investment_strategy_backtest.ipynb`.
+- **Concepts:** Chronological event-driven simulation, dual-wallet accounting (fiat base cash vs tactical reserve cash vs BTC holding), cash flow tracking, fee modeling (bps), 5-tier dynamic accumulation multipliers, macro circuit breaker halts, CAGR (365-day basis), Maximum Drawdown (MDD), continuous annualized Sharpe and Sortino ratios, Calmar ratio, acquisition cost discount vs average market price.
+- **Expected output:** Deterministic backtest execution across multi-year histories, multi-strategy side-by-side benchmarking tables (ASCII, Markdown, JSON), reproducible visual research notebook, zero cash leakage across simulations.
+- **Tests:** Model contract validation, strategy decision logic & multipliers, mathematical verification of metrics (CAGR, MDD, Sharpe, Sortino, Calmar), full event loop simulation, fee deduction, cash accounting conservation, CLI argument parsing and error handling (80 new tests, 625 total tests, 100% pass).
+- **Portfolio value:** Provides empirical, quantitative justification for capital deployment before autonomous execution (Phases 15 & 16), proving out-of-sample risk-adjusted outperformance and drawdown reduction.
+- **Definition of done:** All 3 strategies benchmarked; CLI `bitcoin-data backtest` operational; quantitative metrics mathematically verified; Jupyter notebook committed and reproducible; 100% test pass rate with zero regression across all phases.
+- **Interview outcome:** Defend why Dynamic Reserve DCA outperforms naive DCA and Buy & Hold in drawdown protection, explain the mathematical difference between Sharpe and Sortino ratios in asymmetric return distributions, and demonstrate how to design an event-driven backtester free from lookahead bias.
+
 ## Stage gates
 
 Do not advance merely because a phase is interesting. At each gate ask:
