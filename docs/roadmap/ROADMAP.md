@@ -159,6 +159,18 @@ Each phase solves the next observed problem. A phase is complete only when its o
 - **Definition of done:** All 3 data sources operational; DuckDB analytical view generates correct Mayer Multiple, MVRV, FNG, and signal classifications; zero API keys required; 100% test coverage with zero regression.
 - **Interview outcome:** Explain the mechanics of MVRV and Mayer Multiple, how multi-domain marts handle asynchronous cadences, and how deterministic signal classification avoids black-box ML pitfalls.
 
+## Phase 13 — Investment signal engine: daily generation, news sentinel & Telegram alert dispatch
+
+- **Objective:** Operationalize tactical asset allocation with daily investment signal generation from `mart_btc_investment_signals_daily`, automated CoinDesk RSS scanning for critical black swan market events, and real-time Telegram notification delivery.
+- **Prerequisites:** Phase 12 investment data expansion and conformed mart `mart_btc_investment_signals_daily`.
+- **Components:** `SignalGenerator` (`signals/generator.py`), `NewsSentinel` (`signals/news_sentinel.py`), `TelegramDispatcher` (`alerts/telegram_dispatcher.py`), DuckDB tables `signal_history` and `news_sentinel_alerts`, CLI subcommands `generate-signal`, `news-sentinel`, `send-alert`.
+- **Concepts:** Rule-based tactical asset allocation, multi-indicator agreement rating (STRONG, MODERATE, WEAK), localized narratives (Bahasa Indonesia), RSS XML parsing and regex filtering, SHA-256 event deduplication, Telegram Bot API integration with retry backoff and credential redaction.
+- **Expected output:** Deterministic daily signal reports (JSON and text), deduplicated news alerts with severity categorization, audit trail storage in DuckDB, and zero-dependency Telegram notification dispatch.
+- **Tests:** Signal regime evaluation, multi-indicator strength computation, RSS keyword extraction and deduplication, XML error handling, Telegram markdown formatting, dry-run dispatch, transient error retry, and credential protection.
+- **Portfolio value:** Transforms passive data warehousing into an active, automated investment advisory and event-monitoring platform.
+- **Definition of done:** All CLI subcommands operational; DuckDB audit tables populated; Telegram notifications delivered in dry-run and live modes; zero API credentials leaked; full test suite and quality gates passing.
+- **Interview outcome:** Explain how rule-based signal consensus eliminates hallucination risk, how event-driven news monitoring provides defensive circuit breakers, and how to build secure notification channels with zero external framework dependencies.
+
 ## Stage gates
 
 Do not advance merely because a phase is interesting. At each gate ask:

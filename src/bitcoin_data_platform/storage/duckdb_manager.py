@@ -25,10 +25,15 @@ class RunLockError(DuckDBManagerError):
 class DuckDBManager:
     """Manages DuckDB database connection, analytical views, run locking, and execution."""
 
-    def __init__(self, db_path: Path | str, curated_dir: Path | str) -> None:
+    def __init__(self, db_path: Path | str, curated_dir: Path | str | None = None) -> None:
         self.db_path_str = str(db_path)
         self.db_path = Path(db_path) if self.db_path_str != ":memory:" else None
-        self.curated_dir = Path(curated_dir)
+        if curated_dir is not None:
+            self.curated_dir = Path(curated_dir)
+        elif self.db_path is not None:
+            self.curated_dir = self.db_path.parent.parent / "curated"
+        else:
+            self.curated_dir = Path("./data/curated")
         self._connection: duckdb.DuckDBPyConnection | None = None
 
     def get_connection(self) -> duckdb.DuckDBPyConnection:
@@ -721,6 +726,201 @@ class DuckDBManager:
         """
         con.execute(sql)
 
+    def create_signal_history_table(self) -> None:
+        """Create signal_history table if not exists."""
+        con = self.get_connection()
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS signal_history (
+                signal_date_utc DATE PRIMARY KEY,
+                generated_at_utc TIMESTAMPTZ NOT NULL,
+                market_close_usd DOUBLE,
+                sma_200 DOUBLE,
+                mayer_multiple DOUBLE,
+                mvrv_ratio DOUBLE,
+                fng_value INTEGER,
+                fng_classification VARCHAR,
+                has_high_impact_macro_event BOOLEAN,
+                investment_signal VARCHAR NOT NULL,
+                signal_strength VARCHAR NOT NULL,
+                narrative VARCHAR
+            );
+            """
+        )
+
+    def insert_signal_history(
+        self,
+        *,
+        signal_date_utc: Any,
+        generated_at_utc: Any,
+        market_close_usd: float | None,
+        sma_200: float | None,
+        mayer_multiple: float | None,
+        mvrv_ratio: float | None,
+        fng_value: int,
+        fng_classification: str,
+        has_high_impact_macro_event: bool,
+        investment_signal: str,
+        signal_strength: str,
+        narrative: str,
+    ) -> None:
+        """Insert or replace a record in signal_history."""
+        con = self.get_connection()
+        self.create_signal_history_table()
+        con.execute(
+            """
+            INSERT OR REPLACE INTO signal_history (
+                signal_date_utc, generated_at_utc, market_close_usd, sma_200,
+                mayer_multiple, mvrv_ratio, fng_value, fng_classification,
+                has_high_impact_macro_event, investment_signal, signal_strength,
+                narrative
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            [
+                signal_date_utc,
+                generated_at_utc,
+                market_close_usd,
+                sma_200,
+                mayer_multiple,
+                mvrv_ratio,
+                fng_value,
+                fng_classification,
+                has_high_impact_macro_event,
+                investment_signal,
+                signal_strength,
+                narrative,
+            ],
+        )
+
+    def create_news_sentinel_alerts_table(self) -> None:
+        """Create news_sentinel_alerts table if not exists."""
+        con = self.get_connection()
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS news_sentinel_alerts (
+                alert_id VARCHAR PRIMARY KEY,
+                title VARCHAR NOT NULL,
+                link VARCHAR,
+                published_utc TIMESTAMPTZ,
+                matched_keywords VARCHAR,
+                severity VARCHAR NOT NULL,
+                ingested_at_utc TIMESTAMPTZ NOT NULL,
+                telegram_sent BOOLEAN DEFAULT FALSE
+            );
+            """
+        )
+
+    def insert_news_alerts(self, alerts: Sequence[Any]) -> int:
+        """Insert or replace news alerts in news_sentinel_alerts."""
+        if not alerts:
+            return 0
+        con = self.get_connection()
+        self.create_news_sentinel_alerts_table()
+        rows = []
+        for a in alerts:
+            keywords = (
+                ", ".join(a.matched_keywords)
+                if isinstance(a.matched_keywords, list | tuple | set)
+                else str(a.matched_keywords)
+            )
+            rows.append(
+                (
+                    a.alert_id,
+                    a.title,
+                    a.link,
+                    a.published_utc,
+                    keywords,
+                    a.severity,
+                    a.ingested_at_utc,
+                    getattr(a, "telegram_sent", False),
+                )
+            )
+        con.executemany(
+            """
+            INSERT OR REPLACE INTO news_sentinel_alerts (
+                alert_id, title, link, published_utc, matched_keywords, severity,
+                ingested_at_utc, telegram_sent
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            rows,
+        )
+        return len(rows)
+
+    def get_seen_alert_ids(self) -> set[str]:
+        """Return set of alert_ids already recorded in news_sentinel_alerts."""
+        con = self.get_connection()
+        self.create_news_sentinel_alerts_table()
+        rows = con.execute("SELECT alert_id FROM news_sentinel_alerts;").fetchall()
+        return {str(r[0]) for r in rows}
+
+    def get_unsent_news_alerts(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return alerts that have not yet been sent to Telegram."""
+        con = self.get_connection()
+        self.create_news_sentinel_alerts_table()
+        rows = con.execute(
+            """
+            SELECT alert_id, title, link,
+                   STRFTIME(published_utc, '%Y-%m-%dT%H:%M:%S.%fZ') AS published_utc,
+                   matched_keywords, severity,
+                   STRFTIME(ingested_at_utc, '%Y-%m-%dT%H:%M:%S.%fZ') AS ingested_at_utc,
+                   telegram_sent
+            FROM news_sentinel_alerts
+            WHERE telegram_sent = FALSE
+            ORDER BY published_utc ASC
+            LIMIT ?;
+            """,
+            [limit],
+        ).fetchall()
+        cols = [
+            "alert_id",
+            "title",
+            "link",
+            "published_utc",
+            "matched_keywords",
+            "severity",
+            "ingested_at_utc",
+            "telegram_sent",
+        ]
+        return [dict(zip(cols, r, strict=False)) for r in rows]
+
+    def get_latest_news_alerts(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Return latest recorded alerts."""
+        con = self.get_connection()
+        self.create_news_sentinel_alerts_table()
+        rows = con.execute(
+            """
+            SELECT alert_id, title, link,
+                   STRFTIME(published_utc, '%Y-%m-%dT%H:%M:%S.%fZ') AS published_utc,
+                   matched_keywords, severity,
+                   STRFTIME(ingested_at_utc, '%Y-%m-%dT%H:%M:%S.%fZ') AS ingested_at_utc,
+                   telegram_sent
+            FROM news_sentinel_alerts
+            ORDER BY published_utc DESC
+            LIMIT ?;
+            """,
+            [limit],
+        ).fetchall()
+        cols = [
+            "alert_id",
+            "title",
+            "link",
+            "published_utc",
+            "matched_keywords",
+            "severity",
+            "ingested_at_utc",
+            "telegram_sent",
+        ]
+        return [dict(zip(cols, r, strict=False)) for r in rows]
+
+    def mark_news_alert_sent(self, alert_id: str) -> None:
+        """Mark an alert as sent via Telegram."""
+        con = self.get_connection()
+        self.create_news_sentinel_alerts_table()
+        con.execute(
+            "UPDATE news_sentinel_alerts SET telegram_sent = TRUE WHERE alert_id = ?;",
+            [alert_id],
+        )
+
     def initialize(self) -> None:
         """Initialize database schema, tables, and views."""
         self.create_metadata_table()
@@ -728,6 +928,8 @@ class DuckDBManager:
         self.create_quality_checks_table()
         self.create_sentiment_table()
         self.create_macro_events_table()
+        self.create_signal_history_table()
+        self.create_news_sentinel_alerts_table()
         self.create_hourly_view()
         self.create_daily_mart_view()
         self.create_network_fact_view()
