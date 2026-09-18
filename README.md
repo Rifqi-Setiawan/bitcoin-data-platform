@@ -552,6 +552,31 @@ bitcoin-data diagnose --dry-run
 bitcoin-data diagnose --auto-heal
 ```
 
+### Web UI Dashboard & API Server
+
+The platform includes a zero-dependency, lightweight web dashboard ("Bitcoin Market Hub") served using Python's standard library `ThreadingHTTPServer` (`src/bitcoin_data_platform/dashboard/`).
+It renders a responsive dark-mode technical UI featuring 3 balanced KPI cards (Spot Price, 24h Volume, Blockchain Network Activity), interactive Chart.js price & volume history, recent trade tape, conformed daily ledger table with search & pagination, and direct CSV export endpoints.
+
+```bash
+# 1. Launch the Web UI Dashboard on default port (http://127.0.0.1:8080)
+bitcoin-data dashboard --port 8080
+
+# 2. Bind to a specific host and custom DuckDB database path
+bitcoin-data dashboard \
+  --host 127.0.0.1 \
+  --port 8080 \
+  --db-path ./data/state/platform.duckdb
+```
+
+#### API Endpoints
+
+- `GET /`: Serves the production dashboard single-page web interface.
+- `GET /api/kpi?asset=BTC`: Returns real-time 3-card KPI metrics from DuckDB `mart_btc_market_and_network_daily`.
+- `GET /api/chart?asset=BTC&range=30D`: Returns historical timeseries (OHLCV) from `mart_btc_usd_daily` / `fact_market_candle_hourly`.
+- `GET /api/trades?asset=BTC`: Returns recent trade executions.
+- `GET /api/ledger?asset=BTC&limit=30`: Returns daily conformed cross-domain ledger rows.
+- `GET /api/export?format=csv&asset=BTC`: Serves direct CSV file download with `Content-Disposition` header.
+
 ## Quality gates
 
 Run the documented quality gates:
