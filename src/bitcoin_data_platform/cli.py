@@ -12,6 +12,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from bitcoin_data_platform.diagnostics.cli import (
+    handle_diagnostics_cli,
+    register_diagnostics_cli,
+)
 from bitcoin_data_platform.infra import dispatch_failure_alert
 from bitcoin_data_platform.lakehouse.cli import handle_lakehouse_cli, register_lakehouse_cli
 from bitcoin_data_platform.quality import run_dataset_quality_checks
@@ -768,6 +772,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     register_lakehouse_cli(subparsers)
+    register_diagnostics_cli(subparsers)
 
     return parser
 
@@ -1513,6 +1518,9 @@ def main(
 
     if args.command == "lakehouse":
         return handle_lakehouse_cli(args)
+
+    if args.command == "diagnose":
+        return handle_diagnostics_cli(args, clock=clock)
 
     sys.stderr.write(f"error: unrecognized command: {args.command}\n")
     return 2

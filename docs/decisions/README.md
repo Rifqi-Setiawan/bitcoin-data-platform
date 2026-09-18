@@ -89,3 +89,11 @@ This log is intentionally lightweight. Promote a decision to a numbered ADR when
 - **Alternatives:** Apache Iceberg with Nessie / AWS Glue catalog, Delta Lake Standalone, Apache Spark / Trino cluster.
 - **Trade-offs:** Snapshot metadata history consumes SQLite disk space until vacuumed; slight write latency overhead for ACID transaction commits.
 - **Reconsider when:** Dataset volume crosses 100M rows on distributed object storage or multi-node distributed compute becomes cost-effective. (See `D-011_LAKEHOUSE_EVOLUTION.md` for full evaluation).
+
+## D-012 — Auditable Operational Diagnostics and Human-in-the-Loop Self-Healing Framework
+
+- **Decision:** Implement an out-of-band, rule-based operational diagnostics engine and bounded self-healing framework in `src/bitcoin_data_platform/diagnostics/` governed by an explicit 6-incident failure taxonomy (INC-01 to INC-06), 100% read-only telemetry collection, SQL query auditing, and bounded remediation actions with dry-run default.
+- **Reason:** Eliminates ad-hoc manual triage during operational outages, reduces MTTD and MTTR, preserves watermark monotonicity and raw data immutability, and provides transparent audit trails without pipeline coupling or autonomous black-box risks.
+- **Alternatives:** Autonomous AI self-healing agents, coupled pipeline error recovery loops, manual ad-hoc log grepping.
+- **Trade-offs:** Bounded self-healing covers only known taxonomies; unclassified failures still require human intervention.
+- **Reconsider when:** Pipeline moves to a distributed multi-node orchestrator with native cluster diagnostics. (See `D-012_DIAGNOSTICS_SELF_HEALING.md` for full evaluation).
