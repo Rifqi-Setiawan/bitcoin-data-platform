@@ -571,6 +571,33 @@ bitcoin-data fetch-sentiment --limit 7
 bitcoin-data fetch-macro-calendar
 ```
 
+### Investment Signal Engine (Phase 13)
+
+Phase 13 operationalizes tactical asset allocation with deterministic daily signal generation, automated breaking news event detection, and Telegram alert delivery:
+1. **Daily Signal Generator (`generate-signal`)**: Evaluates `mart_btc_investment_signals_daily` to compute regime signals (`AGGRESSIVE_ACCUMULATE`, `OPPORTUNISTIC_ACCUMULATE`, `STANDARD_DCA`, `DEFENSIVE_RESERVE`, `HARD_FREEZE`), multi-indicator agreement strength (`STRONG`, `MODERATE`, `WEAK`), and localized narratives in Bahasa Indonesia, with audit trail persistence to `signal_history`.
+2. **CoinDesk News Sentinel (`news-sentinel`)**: Scans CoinDesk RSS feed with regex keyword rules for critical events (hacks, exploits, insolvency, SEC enforcement) and warning events (ETF decisions, FOMC, CPI, stablecoin depegs), with SHA-256 deduplication in `news_sentinel_alerts`.
+3. **Telegram Alert Dispatcher (`send-alert`)**: Formats and dispatches investment signals and emergency alerts via Telegram Bot API with dry-run support, transient retry backoff, and credential redaction.
+
+```bash
+# 1. Generate latest investment signal (human-readable)
+bitcoin-data generate-signal
+
+# 2. Generate signal as JSON and persist to DuckDB signal_history
+bitcoin-data generate-signal --json --save
+
+# 3. Generate signal for a specific historical date
+bitcoin-data generate-signal --date 2026-09-18
+
+# 4. Scan CoinDesk RSS feed for market-moving events
+bitcoin-data news-sentinel
+
+# 5. Preview investment signal Telegram message (dry-run)
+bitcoin-data send-alert --type signal --dry-run
+
+# 6. Preview emergency news alert Telegram message (dry-run)
+bitcoin-data send-alert --type news --dry-run
+```
+
 ### Web UI Dashboard & API Server
 
 The platform includes a zero-dependency, lightweight web dashboard ("Bitcoin Market Hub") served using Python's standard library `ThreadingHTTPServer` (`src/bitcoin_data_platform/dashboard/`).

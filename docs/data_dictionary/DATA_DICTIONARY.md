@@ -26,7 +26,9 @@ The platform employs a two-tier storage and modeling architecture:
 6. [raw_crypto_sentiment_daily](#6-raw_crypto_sentiment_daily)
 7. [raw_macro_economic_events](#7-raw_macro_economic_events)
 8. [mart_btc_investment_signals_daily](#8-mart_btc_investment_signals_daily)
-9. [Type System & Serialization Conventions](#9-type-system--serialization-conventions)
+9. [signal_history](#9-signal_history)
+10. [news_sentinel_alerts](#10-news_sentinel_alerts)
+11. [Type System & Serialization Conventions](#11-type-system--serialization-conventions)
 
 ---
 
@@ -41,6 +43,8 @@ The platform employs a two-tier storage and modeling architecture:
 | `raw_crypto_sentiment_daily` | Ingestion Table | 1 UTC day | `sentiment_date_utc` | DuckDB Table |
 | `raw_macro_economic_events` | Ingestion Table | 1 scheduled event | `event_id` | DuckDB Table |
 | `mart_btc_investment_signals_daily` | Analytical Mart | 1 UTC day | `trade_date_utc` | DuckDB SQL View |
+| `signal_history` | Audit & Serving | 1 UTC day | `signal_date_utc` | DuckDB Table |
+| `news_sentinel_alerts` | Ingestion & Alerting | 1 alert event | `alert_id` | DuckDB Table |
 
 ---
 
@@ -228,7 +232,61 @@ Multi-domain conformed analytical mart joining daily market prices, 200-day roll
 
 ---
 
-## 9. Type System & Serialization Conventions
+## 9. signal_history
+
+### Description
+Audit trail and historical store of generated daily investment signals, indicator snapshots, signal strength assessments, and human-readable narratives in Bahasa Indonesia.
+
+- **Layer**: Audit & Serving Layer
+- **Implementation**: DuckDB Table
+- **Natural Key**: `signal_date_utc`
+- **Grain**: 1 row per UTC calendar day
+
+### Schema
+
+| Column Name | Data Type | Nullable | Description & Business Rules |
+| :--- | :--- | :--- | :--- |
+| `signal_date_utc` | `DATE` | No | Target calendar date for the investment signal in UTC. Primary key. |
+| `generated_at_utc` | `TIMESTAMPTZ` | No | Timestamp when the signal was computed and recorded. |
+| `market_close_usd` | `DOUBLE` | Yes | Market close price in USD evaluated at generation. |
+| `sma_200` | `DOUBLE` | Yes | 200-day simple moving average value evaluated at generation. |
+| `mayer_multiple` | `DOUBLE` | Yes | Mayer Multiple evaluated at generation. |
+| `mvrv_ratio` | `DOUBLE` | Yes | On-chain MVRV ratio evaluated at generation. |
+| `fng_value` | `INTEGER` | No | Fear & Greed index score (0–100) at generation. |
+| `fng_classification` | `VARCHAR` | No | Fear & Greed classification label at generation. |
+| `has_high_impact_macro_event` | `BOOLEAN` | No | Flag indicating whether a high-impact macroeconomic event coincided with the date. |
+| `investment_signal` | `VARCHAR` | No | Computed regime signal (`AGGRESSIVE_ACCUMULATE`, `OPPORTUNISTIC_ACCUMULATE`, `STANDARD_DCA`, `DEFENSIVE_RESERVE`, `HARD_FREEZE`). |
+| `signal_strength` | `VARCHAR` | No | Multi-indicator agreement strength (`STRONG`, `MODERATE`, `WEAK`). |
+| `narrative` | `VARCHAR` | Yes | Contextual explanation and rationale for the signal in Bahasa Indonesia. |
+
+---
+
+## 10. news_sentinel_alerts
+
+### Description
+Deduplicated log of market-moving news events detected by the CoinDesk RSS scanner, tracking keywords, severity, and Telegram dispatch status.
+
+- **Layer**: Ingestion & Alerting Layer
+- **Implementation**: DuckDB Table
+- **Natural Key**: `alert_id`
+- **Grain**: 1 row per distinct news event
+
+### Schema
+
+| Column Name | Data Type | Nullable | Description & Business Rules |
+| :--- | :--- | :--- | :--- |
+| `alert_id` | `VARCHAR` | No | SHA-256 hash of headline title + published timestamp. Primary key. |
+| `title` | `VARCHAR` | No | Headline title of the news article. |
+| `link` | `VARCHAR` | Yes | Web URL link to the original article. |
+| `published_utc` | `TIMESTAMPTZ` | Yes | Publication timestamp of the article converted to UTC. |
+| `matched_keywords` | `VARCHAR` | Yes | Comma-separated list of trigger keywords matched in title/description. |
+| `severity` | `VARCHAR` | No | Alert severity level (`CRITICAL` or `WARNING`). |
+| `ingested_at_utc` | `TIMESTAMPTZ` | No | UTC timestamp when the sentinel scanned and recorded the alert. |
+| `telegram_sent` | `BOOLEAN` | No | Dispatch status flag indicating whether the alert was sent to Telegram. |
+
+---
+
+## 11. Type System & Serialization Conventions
 
 - **Monetary & Volume Precision**: All monetary prices and asset volumes are maintained as fixed-point `DECIMAL(38,18)` in Parquet and DuckDB to eliminate binary floating-point roundoff errors.
 - **Timezone Invariant**: All timestamps are strictly UTC with explicit timezone offset (`TIMESTAMPTZ` / `pyarrow.timestamp("us", tz="UTC")`). Naive datetimes are forbidden.

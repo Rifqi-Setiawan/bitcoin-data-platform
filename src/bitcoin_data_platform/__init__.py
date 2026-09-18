@@ -1,10 +1,27 @@
 """Bitcoin Data Engineering Platform."""
 
+from bitcoin_data_platform.alerts.telegram_dispatcher import (
+    TelegramDispatcher,
+    format_news_alert_message,
+    format_signal_message,
+)
 from bitcoin_data_platform.quality.checks import (
     QualityCheckError,
     check_candle,
     filter_valid_candles,
     validate_candle_quality,
+)
+from bitcoin_data_platform.signals.generator import (
+    InvestmentSignal,
+    SignalGenerator,
+    compute_signal_strength,
+    generate_narrative,
+)
+from bitcoin_data_platform.signals.news_sentinel import (
+    NewsAlert,
+    NewsSentinel,
+    NewsSentinelError,
+    compute_alert_id,
 )
 from bitcoin_data_platform.sources.coinbase_client import (
     CoinbaseClient,
@@ -92,8 +109,12 @@ __all__ = [
     "ENDPOINT_NAME",
     "InvalidIntervalError",
     "InvalidTimezoneError",
+    "InvestmentSignal",
     "MalformedTimestampError",
     "MisalignedBoundaryError",
+    "NewsAlert",
+    "NewsSentinel",
+    "NewsSentinelError",
     "NormalizedCandle",
     "OpenCandleError",
     "PARQUET_SCHEMA",
@@ -106,8 +127,10 @@ __all__ = [
     "SCHEMA_VERSION",
     "SOURCE_NAME",
     "SafetyLimitExceededError",
+    "SignalGenerator",
     "SourceUnavailableError",
     "StorageError",
+    "TelegramDispatcher",
     "TimeRange",
     "TimeRangeError",
     "ValidationResult",
@@ -115,11 +138,16 @@ __all__ = [
     "__version__",
     "candles_to_table",
     "check_candle",
+    "compute_alert_id",
     "compute_payload_sha256",
+    "compute_signal_strength",
     "create_raw_envelope",
     "filter_valid_candles",
     "format_canonical_utc",
     "format_envelope_filename",
+    "format_news_alert_message",
+    "format_signal_message",
+    "generate_narrative",
     "normalize_candle",
     "normalize_envelopes",
     "parse_iso_utc",

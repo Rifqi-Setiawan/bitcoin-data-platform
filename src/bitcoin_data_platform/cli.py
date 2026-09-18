@@ -8,10 +8,11 @@ import sys
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from bitcoin_data_platform.alerts.telegram_dispatcher import TelegramDispatcher
 from bitcoin_data_platform.diagnostics.cli import (
     handle_diagnostics_cli,
     register_diagnostics_cli,
@@ -24,6 +25,12 @@ from bitcoin_data_platform.serving import (
     execute_parameterized_query,
     export_arrow_table,
     load_query_file,
+)
+from bitcoin_data_platform.signals.generator import SignalGenerator
+from bitcoin_data_platform.signals.news_sentinel import (
+    NewsAlert,
+    NewsSentinel,
+    NewsSentinelError,
 )
 from bitcoin_data_platform.sources.coin_metrics_client import (
     CoinMetricsClient,
@@ -842,6 +849,99 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # 17. generate-signal command
+    generate_signal_parser = subparsers.add_parser(
+        "generate-signal",
+        parents=[base_db_parser],
+        help="Generate Bitcoin investment signal from analytical mart.",
+        description=(
+            "Generate daily Bitcoin investment signal from mart_btc_investment_signals_daily "
+            "analytical view, with multi-indicator strength rating and narrative."
+        ),
+    )
+    generate_signal_parser.add_argument(
+        "--date",
+        type=str,
+        default=None,
+        help="Target date YYYY-MM-DD (default: latest available).",
+    )
+    generate_signal_parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Output as JSON (default: human-readable).",
+    )
+    generate_signal_parser.add_argument(
+        "--save",
+        action="store_true",
+        default=False,
+        help="Persist generated signal to signal_history table.",
+    )
+
+    # 18. news-sentinel command
+    news_sentinel_parser = subparsers.add_parser(
+        "news-sentinel",
+        parents=[base_db_parser],
+        help="Scan CoinDesk RSS feed for critical market events.",
+        description=(
+            "Scan CoinDesk RSS feed for critical and warning market keywords, "
+            "deduplicate against DuckDB news_sentinel_alerts table, and output alerts."
+        ),
+    )
+    news_sentinel_parser.add_argument(
+        "--feed-url",
+        type=str,
+        default="https://www.coindesk.com/arc/outboundfeeds/rss/",
+        help="RSS feed URL (default: CoinDesk RSS).",
+    )
+    news_sentinel_parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Output as JSON.",
+    )
+
+    # 19. send-alert command
+    send_alert_parser = subparsers.add_parser(
+        "send-alert",
+        parents=[base_db_parser],
+        help="Send investment signals or emergency news alerts via Telegram.",
+        description=(
+            "Format and dispatch daily investment signals or emergency news alerts "
+            "to Telegram chat via Bot API."
+        ),
+    )
+    send_alert_parser.add_argument(
+        "--type",
+        choices=["signal", "news"],
+        required=True,
+        help="Alert type to send (signal | news).",
+    )
+    send_alert_parser.add_argument(
+        "--date",
+        type=str,
+        default=None,
+        help="Signal date YYYY-MM-DD (for type=signal).",
+    )
+    send_alert_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Print formatted message to stdout without calling Telegram API.",
+    )
+    send_alert_parser.add_argument(
+        "--bot-token",
+        type=str,
+        default=None,
+        help="Telegram Bot token (or env TELEGRAM_BOT_TOKEN).",
+    )
+    send_alert_parser.add_argument(
+        "--chat-id",
+        type=str,
+        default=None,
+        help="Telegram chat ID (or env TELEGRAM_CHAT_ID).",
+    )
+
     return parser
 
 
@@ -854,6 +954,9 @@ def main(
     connect_factory: Any = None,
     sentiment_client: SentimentClient | None = None,
     macro_client: MacroCalendarClient | None = None,
+    signal_generator: SignalGenerator | None = None,
+    news_sentinel: NewsSentinel | None = None,
+    telegram_dispatcher: TelegramDispatcher | None = None,
 ) -> int:
     parser = build_parser()
     if argv is None:
@@ -1692,6 +1795,204 @@ def main(
         }
         sys.stdout.write(json.dumps(macro_summary, indent=2) + "\n")
         return 0
+
+    if args.command == "generate-signal":
+        db_path = Path(args.db_path)
+        curated_dir = db_path.parent.parent / "curated"
+        db_manager = DuckDBManager(db_path=db_path, curated_dir=curated_dir)
+        db_manager.create_signal_history_table()
+
+        generator = (
+            signal_generator
+            if signal_generator is not None
+            else SignalGenerator(db_path=db_path, db_manager=db_manager)
+        )
+
+        try:
+            if args.date:
+                try:
+                    target_date = date.fromisoformat(args.date)
+                except ValueError:
+                    sys.stderr.write(
+                        f"error: invalid date format '{args.date}', expected YYYY-MM-DD\n"
+                    )
+                    return 2
+                signal = generator.generate_for_date(target_date)
+                if signal is None:
+                    sys.stderr.write(f"error: no signal data found for date {args.date}\n")
+                    return 2
+            else:
+                signal = generator.generate_latest()
+        except ValueError as exc:
+            sys.stderr.write(f"error: {exc}\n")
+            return 2
+        except Exception as exc:
+            sys.stderr.write(f"error: failed to generate signal: {exc}\n")
+            return 1
+
+        if args.save:
+            try:
+                generator.save_signal(signal)
+            except Exception as exc:
+                sys.stderr.write(f"error: failed to save signal to history: {exc}\n")
+                return 5
+
+        if args.json:
+            sys.stdout.write(json.dumps(signal.to_dict(), indent=2) + "\n")
+        else:
+            mm_str = f"{signal.mayer_multiple:.2f}" if signal.mayer_multiple is not None else "N/A"
+            mvrv_str = f"{signal.mvrv_ratio:.2f}" if signal.mvrv_ratio is not None else "N/A"
+            sys.stdout.write(
+                f"Bitcoin Investment Signal: {signal.signal_date_utc}\n"
+                f"Close: ${signal.market_close_usd:,.2f}\n"
+                f"Mayer Multiple: {mm_str}\n"
+                f"MVRV: {mvrv_str}\n"
+                f"Fear & Greed: {signal.fng_value} ({signal.fng_classification})\n"
+                f"Macro Event: {'Yes' if signal.has_high_impact_macro_event else 'No'}\n"
+                f"Signal: {signal.investment_signal} ({signal.signal_strength})\n"
+                f"Narrative: {signal.narrative}\n"
+            )
+        return 0
+
+    if args.command == "news-sentinel":
+        db_path = Path(args.db_path)
+        curated_dir = db_path.parent.parent / "curated"
+        db_manager = DuckDBManager(db_path=db_path, curated_dir=curated_dir)
+        db_manager.create_news_sentinel_alerts_table()
+
+        sentinel = (
+            news_sentinel
+            if news_sentinel is not None
+            else NewsSentinel(feed_url=args.feed_url, db_manager=db_manager)
+        )
+
+        try:
+            alerts = sentinel.scan()
+        except NewsSentinelError as exc:
+            sys.stderr.write(f"error: news sentinel scan failed: {exc}\n")
+            return 3
+        except Exception as exc:
+            sys.stderr.write(f"error: news sentinel unexpected error: {exc}\n")
+            return 3
+
+        if args.json:
+            sys.stdout.write(json.dumps([a.to_dict() for a in alerts], indent=2) + "\n")
+        else:
+            if not alerts:
+                sys.stdout.write("No new news alerts detected.\n")
+            else:
+                sys.stdout.write(f"Detected {len(alerts)} new alert(s):\n")
+                for a in alerts:
+                    sys.stdout.write(
+                        f"[{a.severity}] {a.title} ({', '.join(a.matched_keywords)})\n"
+                    )
+        return 0
+
+    if args.command == "send-alert":
+        db_path = Path(args.db_path)
+        curated_dir = db_path.parent.parent / "curated"
+        db_manager = DuckDBManager(db_path=db_path, curated_dir=curated_dir)
+        db_manager.create_signal_history_table()
+        db_manager.create_news_sentinel_alerts_table()
+
+        bot_token = args.bot_token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = args.chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
+
+        if not args.dry_run and (not bot_token or not chat_id):
+            sys.stderr.write(
+                "error: --bot-token and --chat-id "
+                "(or env TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID) are required\n"
+            )
+            return 2
+
+        dispatcher = (
+            telegram_dispatcher
+            if telegram_dispatcher is not None
+            else TelegramDispatcher(
+                bot_token=bot_token or "dry_run",
+                chat_id=chat_id or "dry_run",
+                dry_run=args.dry_run,
+            )
+        )
+
+        if args.type == "signal":
+            generator = (
+                signal_generator
+                if signal_generator is not None
+                else SignalGenerator(db_path=db_path, db_manager=db_manager)
+            )
+            try:
+                if args.date:
+                    try:
+                        target_date = date.fromisoformat(args.date)
+                    except ValueError:
+                        sys.stderr.write(
+                            f"error: invalid date format '{args.date}', expected YYYY-MM-DD\n"
+                        )
+                        return 2
+                    signal = generator.generate_for_date(target_date)
+                    if signal is None:
+                        sys.stderr.write(f"error: no signal data found for date {args.date}\n")
+                        return 2
+                else:
+                    signal = generator.generate_latest()
+            except Exception as exc:
+                sys.stderr.write(f"error: failed to retrieve signal: {exc}\n")
+                return 2
+
+            success = dispatcher.send_signal(signal)
+            if not success and not args.dry_run:
+                sys.stderr.write("error: failed to dispatch signal to Telegram\n")
+                return 3
+            return 0
+
+        elif args.type == "news":
+            alerts_data = db_manager.get_unsent_news_alerts()
+            if not alerts_data and args.dry_run:
+                alerts_data = db_manager.get_latest_news_alerts(limit=1)
+
+            if not alerts_data:
+                if args.dry_run:
+                    sys.stdout.write("No news alerts found to dispatch.\n")
+                return 0
+
+            for ad in alerts_data:
+                raw_pub = ad["published_utc"]
+                if isinstance(raw_pub, datetime):
+                    pub_dt = raw_pub
+                elif isinstance(raw_pub, str):
+                    pub_dt = parse_iso_utc(raw_pub, "published_utc")
+                else:
+                    pub_dt = datetime.now(UTC)
+
+                raw_keywords = ad.get("matched_keywords")
+                keywords_list = (
+                    [k.strip() for k in raw_keywords.split(",") if k.strip()]
+                    if isinstance(raw_keywords, str)
+                    else list(raw_keywords or [])
+                )
+
+                raw_ingested = ad.get("ingested_at_utc")
+                if isinstance(raw_ingested, datetime):
+                    ingested_dt = raw_ingested
+                elif isinstance(raw_ingested, str):
+                    ingested_dt = parse_iso_utc(raw_ingested, "ingested_at_utc")
+                else:
+                    ingested_dt = datetime.now(UTC)
+
+                alert = NewsAlert(
+                    alert_id=str(ad["alert_id"]),
+                    title=str(ad["title"]),
+                    link=str(ad.get("link", "")),
+                    published_utc=pub_dt,
+                    matched_keywords=keywords_list,
+                    severity=str(ad["severity"]),
+                    ingested_at_utc=ingested_dt,
+                )
+                success = dispatcher.send_news_alert(alert)
+                if success and not args.dry_run:
+                    db_manager.mark_news_alert_sent(alert.alert_id)
+            return 0
 
     sys.stderr.write(f"error: unrecognized command: {args.command}\n")
     return 2
