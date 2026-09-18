@@ -528,6 +528,30 @@ bitcoin-data lakehouse vacuum \
   --catalog-dir ./data/lakehouse/catalog
 ```
 
+### Operational Diagnostics & Self-Healing (Phase 11)
+
+Phase 11 provides an auditable, out-of-band operational diagnostics engine and bounded self-healing framework (`src/bitcoin_data_platform/diagnostics/`).
+It inspects telemetry across DuckDB run metadata, quality checks, Lakehouse SQLite catalog, disk usage, and alert state strictly using 100% read-only connections. It classifies incidents against a 6-part deterministic failure taxonomy (INC-01..INC-06), generates audit reports, and simulates or executes safe, bounded self-healing actions.
+
+```bash
+# 1. Diagnose system health and print human-readable triage summary
+bitcoin-data diagnose --format text
+
+# 2. Output machine-readable JSON telemetry and incident report
+bitcoin-data diagnose --format json
+
+# 3. Target root-cause investigation for a specific failed run ID and persist report
+bitcoin-data diagnose \
+  --run-id 843195da-79aa-4df7-8094-0cfc3b7a58ad \
+  --output ./reports/incidents/report.json
+
+# 4. Simulate bounded remediation plans (default dry-run mode)
+bitcoin-data diagnose --dry-run
+
+# 5. Execute bounded self-healing actions (clear stale lock, gap backfill, compaction)
+bitcoin-data diagnose --auto-heal
+```
+
 ## Quality gates
 
 Run the documented quality gates:
@@ -565,11 +589,13 @@ make clean-dist # remove build and packaging artifacts
 - [Phase 8 Specification](docs/specs/PHASE_8_RESEARCH_SERVING_LAYER.md)
 - [Phase 9 Specification](docs/specs/PHASE_9_WEBSOCKET_STREAMING.md)
 - [Phase 10 Specification](docs/specs/PHASE_10_LAKEHOUSE_EVOLUTION.md)
+- [Phase 11 Specification](docs/specs/PHASE_11_OPERATIONAL_DIAGNOSTICS.md)
 - [Official Data Dictionary](docs/data_dictionary/DATA_DICTIONARY.md)
 - [ADR D-008: Container Evaluation](docs/decisions/D-008_CONTAINER_EVALUATION.md)
 - [ADR D-009: dbt-core Evaluation](docs/decisions/D-009_DBT_EVALUATION.md)
 - [ADR D-010: Streaming Experiment](docs/decisions/D-010_STREAMING_EXPERIMENT.md)
 - [ADR D-011: Lakehouse Evolution](docs/decisions/D-011_LAKEHOUSE_EVOLUTION.md)
+- [ADR D-012: Operational Diagnostics & Self-Healing](docs/decisions/D-012_DIAGNOSTICS_SELF_HEALING.md)
 - [Operational Runbook (Phase 3)](docs/runbooks/OPERATIONAL_RUNBOOK.md)
 - [Deployment Runbook (Phase 4)](docs/runbooks/DEPLOYMENT_RUNBOOK.md)
 - [Data Quality Runbook (Phase 5)](docs/runbooks/DATA_QUALITY_RUNBOOK.md)
