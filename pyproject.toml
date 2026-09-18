@@ -43,6 +43,7 @@ pythonpath = ["src"]
 target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
+extend-include = ["*.ipynb"]
 
 [tool.ruff.lint]
 select = [
