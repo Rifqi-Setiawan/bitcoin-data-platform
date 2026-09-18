@@ -28,7 +28,9 @@ The platform employs a two-tier storage and modeling architecture:
 8. [mart_btc_investment_signals_daily](#8-mart_btc_investment_signals_daily)
 9. [signal_history](#9-signal_history)
 10. [news_sentinel_alerts](#10-news_sentinel_alerts)
-11. [Type System & Serialization Conventions](#11-type-system--serialization-conventions)
+11. [Backtest & Validation Contracts](#11-backtest--validation-contracts)
+12. [Forward Paper Trading Tables](#12-forward-paper-trading-tables)
+13. [Type System & Serialization Conventions](#13-type-system--serialization-conventions)
 
 ---
 
@@ -45,6 +47,9 @@ The platform employs a two-tier storage and modeling architecture:
 | `mart_btc_investment_signals_daily` | Analytical Mart | 1 UTC day | `trade_date_utc` | DuckDB SQL View |
 | `signal_history` | Audit & Serving | 1 UTC day | `signal_date_utc` | DuckDB Table |
 | `news_sentinel_alerts` | Ingestion & Alerting | 1 alert event | `alert_id` | DuckDB Table |
+| `paper_portfolio_balance` | Paper Trading State | 1 portfolio | `portfolio_id` | DuckDB Table |
+| `paper_portfolio_snapshots_daily` | Paper Trading Snapshot | 1 UTC day per portfolio | `(snapshot_date, portfolio_id)` | DuckDB Table |
+| `paper_trade_ledger` | Paper Trading Ledger | 1 trade order | `trade_id` | DuckDB Table |
 
 ---
 
@@ -338,7 +343,78 @@ Metrics calculated by `compute_strategy_result`:
 
 ---
 
-## 12. Type System & Serialization Conventions
+## 12. Forward Paper Trading Tables
+
+### 12.1 paper_portfolio_balance
+
+#### Description
+Stores current mark-to-market balances across separated Base Cash and Tactical Reserve Cash pools, Bitcoin stack, and transaction counters.
+
+- **Layer**: Paper Trading State Layer
+- **Physical Location**: `data/state/platform.duckdb`
+- **Primary Key**: `portfolio_id`
+
+| Column Name | Data Type | Nullable | Description & Business Rules |
+| :--- | :--- | :--- | :--- |
+| `portfolio_id` | `VARCHAR` | No | Unique identifier for portfolio (`default`). Primary key. |
+| `initial_cash` | `DOUBLE` | No | Initial USD virtual capital allocation (e.g. `$1,000.00`). |
+| `base_cash` | `DOUBLE` | No | Active liquid cash in base DCA pool (starts at 70% of initial). |
+| `reserve_cash` | `DOUBLE` | No | Tactical dry-powder reserve cash pool (starts at 30% of initial). |
+| `btc_balance` | `DOUBLE` | No | Total accumulated Bitcoin holdings (8 decimal precision). |
+| `total_contributed` | `DOUBLE` | No | Cumulative USD capital allocated to portfolio. |
+| `last_updated_utc` | `TIMESTAMPTZ` | No | UTC timestamp of last balance update. |
+| `total_trades` | `INTEGER` | No | Total count of executed purchase transactions. |
+
+### 12.2 paper_portfolio_snapshots_daily
+
+#### Description
+Maintains daily chronological equity snapshots comparing the Dynamic Reserve DCA portfolio against the $1,000 Lump Sum Buy & Hold benchmark.
+
+- **Layer**: Paper Trading Snapshot Layer
+- **Physical Location**: `data/state/platform.duckdb`
+- **Primary Key**: `(snapshot_date, portfolio_id)`
+
+| Column Name | Data Type | Nullable | Description & Business Rules |
+| :--- | :--- | :--- | :--- |
+| `snapshot_date` | `DATE` | No | Snapshot calendar trade date (UTC). Component of primary key. |
+| `portfolio_id` | `VARCHAR` | No | Target portfolio identifier. Component of primary key. |
+| `base_cash` | `DOUBLE` | No | End-of-day base cash pool balance (USD). |
+| `reserve_cash` | `DOUBLE` | No | End-of-day tactical reserve cash balance (USD). |
+| `total_cash` | `DOUBLE` | No | Total cash holdings (`base_cash + reserve_cash`). |
+| `btc_balance` | `DOUBLE` | No | Accumulated Bitcoin holding balance. |
+| `btc_price` | `DOUBLE` | No | Valuation mark spot price (USD). |
+| `portfolio_equity` | `DOUBLE` | No | Total liquidation equity (`total_cash + btc_balance * btc_price`). |
+| `unrealized_pnl_usd` | `DOUBLE` | No | Net profit/loss in USD (`portfolio_equity - initial_cash`). |
+| `unrealized_pnl_pct` | `DOUBLE` | No | Percentage return on virtual capital. |
+| `benchmark_equity` | `DOUBLE` | No | Valuation of $1,000 invested at Day 0 opening price. |
+
+### 12.3 paper_trade_ledger
+
+#### Description
+Immutable execution order blotter recording all systematic DCA purchases and hold decisions with simulated 10 bps Coinbase Spot fees.
+
+- **Layer**: Paper Trading Ledger Layer
+- **Physical Location**: `data/state/platform.duckdb`
+- **Primary Key**: `trade_id`
+
+| Column Name | Data Type | Nullable | Description & Business Rules |
+| :--- | :--- | :--- | :--- |
+| `trade_id` | `VARCHAR` | No | Unique trade execution identifier (`tr_...`). Primary key. |
+| `portfolio_id` | `VARCHAR` | No | Associated portfolio identifier. |
+| `executed_at_utc` | `TIMESTAMPTZ` | No | Execution timestamp in UTC. |
+| `trade_date` | `DATE` | No | Effective calendar trade date. |
+| `side` | `VARCHAR` | No | Transaction order side (`BUY` or `HOLD`). |
+| `signal_regime` | `VARCHAR` | No | Analytical signal regime (`AGGRESSIVE_ACCUMULATE`, etc.). |
+| `spot_price` | `DOUBLE` | No | Execution spot price in USD. |
+| `gross_amount_usd` | `DOUBLE` | No | Total USD capital deployed for order. |
+| `fee_usd` | `DOUBLE` | No | Deducted transaction commission (10 bps = 0.10%). |
+| `net_amount_usd` | `DOUBLE` | No | Net USD deployed into Bitcoin (`gross - fee`). |
+| `btc_amount` | `DOUBLE` | No | Bitcoin amount received (`net / spot_price`). |
+| `narrative` | `VARCHAR` | No | Human-readable strategy rationale in Bahasa Indonesia. |
+
+---
+
+## 13. Type System & Serialization Conventions
 
 - **Monetary & Volume Precision**: All monetary prices and asset volumes are maintained as fixed-point `DECIMAL(38,18)` in Parquet and DuckDB to eliminate binary floating-point roundoff errors.
 - **Timezone Invariant**: All timestamps are strictly UTC with explicit timezone offset (`TIMESTAMPTZ` / `pyarrow.timestamp("us", tz="UTC")`). Naive datetimes are forbidden.

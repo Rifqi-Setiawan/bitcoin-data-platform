@@ -17,6 +17,8 @@ from typing import Any, cast
 
 import duckdb
 
+from bitcoin_data_platform.paper.engine import PaperTradingEngine
+
 logger = logging.getLogger(__name__)
 
 MONTH_MAP_ID = {
@@ -1406,6 +1408,12 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_ledger(query)
         elif path == "/api/export":
             self._handle_export(query)
+        elif path == "/api/portfolio":
+            self._handle_portfolio(query)
+        elif path == "/api/portfolio/equity":
+            self._handle_portfolio_equity(query)
+        elif path == "/api/portfolio/trades":
+            self._handle_portfolio_trades(query)
         elif path == "/favicon.ico":
             self.send_response(204)
             self.end_headers()
@@ -1554,6 +1562,92 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
             content_type="text/csv; charset=utf-8",
             extra_headers=headers,
         )
+
+    def _handle_portfolio(self, query: dict[str, list[str]]) -> None:
+        """Serve paper trading portfolio summary with live spot price."""
+        portfolio_id = query.get("portfolio_id", ["default"])[0]
+        db_path = self.dashboard_server.db_path
+
+        live_price = _fetch_live_spot_price("BTC")
+
+        try:
+            engine = PaperTradingEngine(db_path=db_path, portfolio_id=portfolio_id)
+            summary = engine.get_portfolio_summary(live_spot_price=live_price)
+            data = summary.to_dict()
+        except Exception as exc:
+            logger.warning("Failed to query portfolio summary: %s, using fallback", exc)
+            spot = live_price if live_price is not None else 85000.0
+            data = {
+                "portfolio_id": portfolio_id,
+                "initial_cash": 1000.00,
+                "total_equity": 1000.00,
+                "unrealized_pnl_usd": 0.00,
+                "unrealized_pnl_pct": 0.00,
+                "base_cash": 700.00,
+                "reserve_cash": 300.00,
+                "total_cash": 1000.00,
+                "btc_balance": 0.0,
+                "btc_value_usd": 0.00,
+                "avg_buy_price": 0.00,
+                "current_spot_price": spot,
+                "acquisition_discount_pct": 0.00,
+                "total_trades": 0,
+                "benchmark_equity": 1000.00,
+                "outperformance_usd": 0.00,
+            }
+
+        self._send_json(data)
+
+    def _handle_portfolio_equity(self, query: dict[str, list[str]]) -> None:
+        """Serve daily equity curve history for paper portfolio vs benchmark."""
+        portfolio_id = query.get("portfolio_id", ["default"])[0]
+        limit_str = query.get("limit", ["90"])[0]
+        try:
+            limit = int(limit_str)
+        except ValueError:
+            limit = 90
+
+        db_path = self.dashboard_server.db_path
+        try:
+            engine = PaperTradingEngine(db_path=db_path, portfolio_id=portfolio_id)
+            series = engine.get_equity_series(limit=limit)
+        except Exception as exc:
+            logger.warning("Failed to query equity series: %s, using fallback", exc)
+            series = []
+
+        if not series:
+            # Provide initial baseline point so charts render gracefully
+            series = [
+                {
+                    "date": datetime.now(UTC).date().isoformat(),
+                    "equity": 1000.0,
+                    "cash": 700.0,
+                    "reserve": 300.0,
+                    "btc_value": 0.0,
+                    "benchmark": 1000.0,
+                }
+            ]
+
+        self._send_json(series)
+
+    def _handle_portfolio_trades(self, query: dict[str, list[str]]) -> None:
+        """Serve executed paper trading order blotter records."""
+        portfolio_id = query.get("portfolio_id", ["default"])[0]
+        limit_str = query.get("limit", ["50"])[0]
+        try:
+            limit = int(limit_str)
+        except ValueError:
+            limit = 50
+
+        db_path = self.dashboard_server.db_path
+        try:
+            engine = PaperTradingEngine(db_path=db_path, portfolio_id=portfolio_id)
+            trades = engine.get_trade_blotter(limit=limit)
+        except Exception as exc:
+            logger.warning("Failed to query trade blotter: %s, using fallback", exc)
+            trades = []
+
+        self._send_json(trades)
 
     def _send_json(self, data: Any, status: int = 200) -> None:
         """Serialize and send JSON response."""

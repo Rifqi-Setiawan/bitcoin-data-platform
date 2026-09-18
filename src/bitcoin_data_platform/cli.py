@@ -31,6 +31,7 @@ from bitcoin_data_platform.diagnostics.cli import (
 )
 from bitcoin_data_platform.infra import dispatch_failure_alert
 from bitcoin_data_platform.lakehouse.cli import handle_lakehouse_cli, register_lakehouse_cli
+from bitcoin_data_platform.paper.cli import handle_paper_cli, register_paper_cli
 from bitcoin_data_platform.quality import run_dataset_quality_checks
 from bitcoin_data_platform.quality.checks import QualityCheckError
 from bitcoin_data_platform.serving import (
@@ -806,6 +807,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     register_lakehouse_cli(subparsers)
     register_diagnostics_cli(subparsers)
+    register_paper_cli(subparsers)
 
     # 14. dashboard command
     dashboard_parser = subparsers.add_parser(
@@ -1773,6 +1775,9 @@ def main(
 
     if args.command == "diagnose":
         return handle_diagnostics_cli(args, clock=clock)
+
+    if args.command == "paper":
+        return handle_paper_cli(args)
 
     if args.command == "dashboard":
         from bitcoin_data_platform.dashboard.server import run_dashboard

@@ -652,6 +652,33 @@ bitcoin-data dashboard \
 - `GET /api/trades?asset=BTC`: Returns recent trade executions.
 - `GET /api/ledger?asset=BTC&limit=30`: Returns daily conformed cross-domain ledger rows.
 - `GET /api/export?format=csv&asset=BTC`: Serves direct CSV file download with `Content-Disposition` header.
+- `GET /api/portfolio`: Returns JSON consolidated summary metrics for forward paper trading.
+- `GET /api/portfolio/equity?limit=90`: Returns daily equity curve history comparing Dynamic Reserve DCA vs Buy & Hold benchmark.
+- `GET /api/portfolio/trades?limit=50`: Returns executed order blotter records from `paper_trade_ledger`.
+
+### Forward Paper Trading Simulation (Phase 15)
+
+Forward-testing paper trading engine initialized with **$1,000 USD virtual capital** (partitioned into $700 Base Cash and $300 Tactical Reserve). Evaluates daily systematic accumulation according to `DynamicReserveDCAStrategy` against live market data, guarded by institutional `RiskGuard` pre-trade validation controls and a filesystem kill-switch (`data/state/PAPER_KILL_SWITCH`).
+
+```bash
+# 1. Initialize paper portfolio with $1,000 virtual capital
+bitcoin-data paper init --initial-cash 1000.0
+
+# 2. Advance simulation by one day executing systematic DCA logic
+bitcoin-data paper step --daily-budget 10.0
+
+# 3. Step on a specific historical date with custom spot price
+bitcoin-data paper step --date 2026-09-18 --daily-budget 15.0 --force-price 85000.0
+
+# 4. View consolidated Fincept Terminal-style portfolio summary
+bitcoin-data paper status --format table
+
+# 5. Export portfolio metrics as JSON
+bitcoin-data paper status --format json
+
+# 6. Reset portfolio to initial capital (requires explicit --force)
+bitcoin-data paper reset --initial-cash 1000.0 --force
+```
 
 ## Quality gates
 
@@ -694,6 +721,7 @@ make clean-dist # remove build and packaging artifacts
 - [Phase 12 Specification](docs/specs/PHASE_12_INVESTMENT_DATA_EXPANSION.md)
 - [Phase 13 Specification](docs/specs/PHASE_13_INVESTMENT_SIGNAL_ENGINE.md)
 - [Phase 14 Specification](docs/specs/PHASE_14_BACKTEST_VALIDATION.md)
+- [Phase 15 Specification](docs/specs/PHASE_15_FORWARD_PAPER_TRADING_DASHBOARD.md)
 - [Official Data Dictionary](docs/data_dictionary/DATA_DICTIONARY.md)
 - [ADR D-008: Container Evaluation](docs/decisions/D-008_CONTAINER_EVALUATION.md)
 - [ADR D-009: dbt-core Evaluation](docs/decisions/D-009_DBT_EVALUATION.md)
