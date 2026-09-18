@@ -774,6 +774,32 @@ def build_parser() -> argparse.ArgumentParser:
     register_lakehouse_cli(subparsers)
     register_diagnostics_cli(subparsers)
 
+    # 14. dashboard command
+    dashboard_parser = subparsers.add_parser(
+        "dashboard",
+        help="Launch interactive Bitcoin Market Hub web dashboard and API server.",
+        description=(
+            "Serve local web dashboard UI and JSON API endpoints for real-time market "
+            "metrics, historical charts, recent trades, and ledger records."
+        ),
+    )
+    dashboard_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host address to bind HTTP dashboard server (default: 127.0.0.1).",
+    )
+    dashboard_parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Port number to bind HTTP dashboard server (default: 8080).",
+    )
+    dashboard_parser.add_argument(
+        "--db-path",
+        default="./data/state/platform.duckdb",
+        help="Path to DuckDB database file (default: ./data/state/platform.duckdb).",
+    )
+
     return parser
 
 
@@ -1521,6 +1547,23 @@ def main(
 
     if args.command == "diagnose":
         return handle_diagnostics_cli(args, clock=clock)
+
+    if args.command == "dashboard":
+        from bitcoin_data_platform.dashboard.server import run_dashboard
+
+        try:
+            run_dashboard(
+                host=args.host,
+                port=args.port,
+                db_path=args.db_path,
+            )
+            return 0
+        except KeyboardInterrupt:
+            sys.stderr.write("\nDashboard server stopped by user.\n")
+            return 0
+        except Exception as exc:
+            sys.stderr.write(f"error: dashboard server failed: {exc}\n")
+            return 1
 
     sys.stderr.write(f"error: unrecognized command: {args.command}\n")
     return 2

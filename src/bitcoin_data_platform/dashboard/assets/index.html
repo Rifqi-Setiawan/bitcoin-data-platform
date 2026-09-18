@@ -1,0 +1,1335 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bitcoin Market Hub — Pemantauan Harga & Pasar Bitcoin Real-Time</title>
+  
+  <!-- Fonts: Inter & JetBrains Mono for clean tabular numerals -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            brand: {
+              gold: '#F7931A',
+              goldHover: '#E07F0E',
+            },
+            dark: {
+              bg: '#090a0d',
+              card: '#12141a',
+              cardHover: '#161922',
+              cardSub: '#181b24',
+              border: 'rgba(255, 255, 255, 0.08)',
+              borderLight: 'rgba(255, 255, 255, 0.12)',
+            },
+            emerald: {
+              400: '#34d399',
+              500: '#10b981',
+              600: '#059669',
+            },
+            rose: {
+              400: '#fb7185',
+              500: '#f43f5e',
+              600: '#e11d48',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      background-color: #090a0d;
+      color: #e4e4e7;
+      font-family: 'Inter', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    
+    .tabular {
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum";
+    }
+
+    .card-border {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .card-border-sub {
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #090a0d;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #27272a;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #3f3f46;
+    }
+
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.35; transform: scale(0.95); }
+    }
+    .live-dot {
+      animation: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+
+    @keyframes flash-green {
+      0% { background-color: rgba(16, 185, 129, 0.25); }
+      100% { background-color: transparent; }
+    }
+    @keyframes flash-red {
+      0% { background-color: rgba(244, 63, 94, 0.25); }
+      100% { background-color: transparent; }
+    }
+    .flash-buy {
+      animation: flash-green 1.2s ease-out;
+    }
+    .flash-sell {
+      animation: flash-red 1.2s ease-out;
+    }
+  </style>
+</head>
+
+<body class="min-h-screen flex flex-col bg-dark-bg text-zinc-200">
+
+  <!-- ========================================== -->
+  <!-- TOP NAVIGATION / HEADER (FRIENDLY & SLEEK) -->
+  <!-- ========================================== -->
+  <header class="sticky top-0 z-50 bg-[#090a0d]/90 backdrop-blur-md border-b border-white/[0.08]">
+    <div class="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+      
+      <!-- Brand & Asset Switcher -->
+      <div class="flex items-center gap-6">
+        <!-- Logo -->
+        <a href="#" class="flex items-center gap-3 group">
+          <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center text-white font-bold text-lg shadow-sm shadow-amber-500/20 group-hover:scale-105 transition-transform">
+            ₿
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-white text-base tracking-tight group-hover:text-amber-400 transition-colors">Bitcoin Market Hub</span>
+              <span class="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 live-dot"></span>
+                Pasar Buka (24/7)
+              </span>
+            </div>
+            <p class="text-[11px] text-zinc-400 font-normal">Pemantauan Harga & Aktivitas Pasar Real-Time</p>
+          </div>
+        </a>
+
+        <!-- Divider -->
+        <div class="hidden md:block h-6 w-px bg-white/[0.08]"></div>
+
+        <!-- Asset Switcher (BTC / ETH) -->
+        <div class="flex items-center bg-[#14171f] p-1 rounded-lg border border-white/[0.06]">
+          <button id="btnAssetBTC" onclick="switchAsset('BTC')" class="flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold bg-amber-500 text-zinc-950 shadow-sm transition-all">
+            <span class="font-bold">₿</span> BTC
+          </button>
+          <button id="btnAssetETH" onclick="switchAsset('ETH')" class="flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium text-zinc-400 hover:text-white transition-all">
+            <span class="font-bold">Ξ</span> ETH
+          </button>
+        </div>
+      </div>
+
+      <!-- Right Header: Live Price & Range Switcher -->
+      <div class="flex items-center gap-4">
+        <!-- Header Live Mini-Price (for quick glance) -->
+        <div class="hidden lg:flex items-center gap-3 px-3 py-1.5 rounded-lg bg-[#12141a] border border-white/[0.06]">
+          <div class="text-right">
+            <div class="text-[10px] text-zinc-400 font-medium uppercase tracking-wider">Harga Spot Live</div>
+            <div id="headerPrice" class="text-sm font-bold text-white tabular tracking-tight">$87,650.01</div>
+          </div>
+          <div id="headerChangeBadge" class="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/25">
+            ▲ +2.41%
+          </div>
+        </div>
+
+        <!-- Time Range Selector -->
+        <div class="flex items-center bg-[#14171f] p-1 rounded-lg border border-white/[0.06]">
+          <button onclick="switchTimeframe('24H')" id="tf24H" class="tf-btn px-2.5 py-1 rounded text-xs font-medium text-zinc-400 hover:text-white transition-colors">24J</button>
+          <button onclick="switchTimeframe('7D')" id="tf7D" class="tf-btn px-2.5 py-1 rounded text-xs font-medium text-zinc-400 hover:text-white transition-colors">7H</button>
+          <button onclick="switchTimeframe('30D')" id="tf30D" class="tf-btn px-2.5 py-1 rounded text-xs font-semibold bg-white/[0.1] text-white shadow-sm transition-colors">30H</button>
+          <button onclick="switchTimeframe('1Y')" id="tf1Y" class="tf-btn px-2.5 py-1 rounded text-xs font-medium text-zinc-400 hover:text-white transition-colors">1T</button>
+          <button onclick="switchTimeframe('ALL')" id="tfALL" class="tf-btn px-2.5 py-1 rounded text-xs font-medium text-zinc-400 hover:text-white transition-colors">Semua</button>
+        </div>
+
+        <!-- Live Sync Pill -->
+        <div class="hidden sm:flex items-center gap-1.5 text-xs text-zinc-400 bg-[#12141a] px-2.5 py-1.5 rounded-lg border border-white/[0.06]">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 live-dot"></span>
+          <span class="text-[11px] font-medium text-zinc-300">Data Real-Time</span>
+        </div>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ========================================== -->
+  <!-- MAIN CONTENT CONTAINER -->
+  <!-- ========================================== -->
+  <main class="flex-1 max-w-[1440px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+    <!-- ========================================== -->
+    <!-- 1. KEY METRICS CARDS (3 KARTU SEIMBANG & RESPONSIF) -->
+    <!-- ========================================== -->
+    <section class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      
+      <!-- Card 1: Harga Saat Ini (Spot Price) + Rentang 24 Jam -->
+      <div class="bg-dark-card rounded-xl p-5 card-border hover:border-white/[0.15] transition-all flex flex-col justify-between relative overflow-hidden group">
+        <div>
+          <div class="flex items-center justify-between text-zinc-400 mb-2.5">
+            <span class="text-xs font-medium text-zinc-400 flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+              Harga Saat Ini (Spot)
+            </span>
+            <span id="spotBadge" class="text-[11px] px-2 py-0.5 rounded font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 tabular">
+              ▲ +2.41%
+            </span>
+          </div>
+          
+          <div class="flex items-baseline gap-2 mb-3">
+            <h2 id="cardSpotPrice" class="text-2xl sm:text-3xl font-bold text-white tabular tracking-tight">$87,650.01</h2>
+            <span id="spotCurrency" class="text-xs text-zinc-400 font-medium">USD</span>
+          </div>
+        </div>
+
+        <!-- 24h Range Bar -->
+        <div class="space-y-1.5 pt-3 border-t border-white/[0.06]">
+          <div class="flex justify-between text-[11px] text-zinc-400 tabular">
+            <span>Terendah 24J: <strong id="rangeLow" class="text-zinc-300 font-medium">$85,410.50</strong></span>
+            <span>Tertinggi 24J: <strong id="rangeHigh" class="text-zinc-300 font-medium">$88,120.00</strong></span>
+          </div>
+          <div class="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden flex">
+            <div id="rangeBar" class="bg-gradient-to-r from-emerald-500 to-amber-400 h-full rounded-full transition-all duration-500" style="width: 82%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 2: Volume Perdagangan 24J (USD & Koin) -->
+      <div class="bg-dark-card rounded-xl p-5 card-border hover:border-white/[0.15] transition-all flex flex-col justify-between group">
+        <div>
+          <div class="flex items-center justify-between text-zinc-400 mb-2.5">
+            <span class="text-xs font-medium text-zinc-400 flex items-center gap-2">
+              <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+              </svg>
+              Volume Perdagangan 24J
+            </span>
+            <span class="text-[11px] px-2 py-0.5 rounded font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">
+              Likuiditas Tinggi
+            </span>
+          </div>
+
+          <div class="flex items-baseline gap-2 mb-3">
+            <h2 id="cardVolumeUsd" class="text-2xl sm:text-3xl font-bold text-white tabular tracking-tight">$75.50 Juta</h2>
+            <span class="text-xs text-zinc-400 font-medium">USD</span>
+          </div>
+        </div>
+
+        <div class="space-y-1.5 pt-3 border-t border-white/[0.06]">
+          <div class="flex items-center justify-between text-[11px]">
+            <span class="text-zinc-400">Total Koin Ditransaksikan:</span>
+            <span id="cardVolumeAsset" class="text-zinc-200 font-semibold tabular">861.42 BTC</span>
+          </div>
+          <div class="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden flex">
+            <div class="bg-gradient-to-r from-blue-500 to-cyan-400 h-full rounded-full transition-all duration-500" style="width: 74%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 3: Aktivitas Jaringan Blockchain (Transaksi Harian & Alamat Aktif) -->
+      <div class="bg-dark-card rounded-xl p-5 card-border hover:border-white/[0.15] transition-all flex flex-col justify-between group">
+        <div>
+          <div class="flex items-center justify-between text-zinc-400 mb-2.5">
+            <span class="text-xs font-medium text-zinc-400 flex items-center gap-2">
+              <svg class="w-3.5 h-3.5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+              </svg>
+              Aktivitas Jaringan Blockchain
+            </span>
+            <span class="text-[11px] px-2 py-0.5 rounded font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              ▲ +4.8% vs 7h
+            </span>
+          </div>
+
+          <div class="flex items-baseline gap-2 mb-3">
+            <h2 id="cardTxCount" class="text-2xl sm:text-3xl font-bold text-white tabular tracking-tight">345,612</h2>
+            <span class="text-xs text-zinc-400 font-medium">transaksi/hari</span>
+          </div>
+        </div>
+
+        <div class="space-y-1.5 pt-3 border-t border-white/[0.06]">
+          <div class="flex items-center justify-between text-[11px]">
+            <span class="text-zinc-400">Pengguna/Alamat Aktif:</span>
+            <span id="cardActiveAddrs" class="text-zinc-200 font-semibold tabular">890,140 Alamat</span>
+          </div>
+          <div class="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden flex">
+            <div class="bg-gradient-to-r from-purple-500 to-indigo-400 h-full rounded-full transition-all duration-500" style="width: 82%"></div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ========================================== -->
+    <!-- 2. MAIN WORKSPACE (CHART + LIVE SIDEBAR) -->
+    <!-- ========================================== -->
+    <section class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      
+      <!-- LEFT / MAIN: INTERACTIVE PRICE CHART (8 COLS) -->
+      <div class="lg:col-span-8 bg-dark-card rounded-xl card-border p-5 flex flex-col justify-between space-y-4">
+        
+        <!-- Chart Header & Controls -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-white/[0.06]">
+          <div>
+            <div class="flex items-center gap-2">
+              <h3 id="chartTitle" class="text-base font-bold text-white tracking-tight">Grafik Pergerakan Harga Bitcoin</h3>
+              <span id="chartPeriodLabel" class="text-xs font-medium text-zinc-400 bg-white/[0.05] px-2 py-0.5 rounded">30 Hari Terakhir</span>
+            </div>
+            <p class="text-xs text-zinc-400 mt-0.5">Arahkan kursor pada garis untuk melihat detail tanggal dan harga penutupan.</p>
+          </div>
+
+          <!-- Controls: Chart Type & Toggles -->
+          <div class="flex items-center gap-2">
+            <!-- Mode Switcher: Garis / Lilin -->
+            <div class="flex items-center bg-[#14171f] p-1 rounded-lg border border-white/[0.06] text-xs">
+              <button id="btnChartLine" onclick="setChartType('line')" class="px-2.5 py-1 rounded font-medium bg-white/[0.1] text-white transition-all">
+                Garis
+              </button>
+              <button id="btnChartCandle" onclick="setChartType('bar')" class="px-2.5 py-1 rounded font-medium text-zinc-400 hover:text-white transition-all">
+                Lilin/Batang
+              </button>
+            </div>
+
+            <!-- Toggle Volume -->
+            <button id="btnToggleVolume" onclick="toggleVolumeSeries()" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#14171f] border border-white/[0.06] text-xs font-medium text-zinc-300 hover:text-white hover:bg-white/[0.05] transition-all">
+              <span id="volumeCheckIcon" class="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <span>Volume</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Quick Summary Bar Above Chart -->
+        <div class="grid grid-cols-3 gap-2 py-2 px-3 rounded-lg bg-[#151821] border border-white/[0.04] text-xs">
+          <div>
+            <span class="text-zinc-400 block text-[11px]">Harga Tertinggi Periode</span>
+            <span id="summaryHigh" class="font-bold text-emerald-400 tabular text-sm">$88,120.00</span>
+          </div>
+          <div>
+            <span class="text-zinc-400 block text-[11px]">Harga Terendah Periode</span>
+            <span id="summaryLow" class="font-bold text-rose-400 tabular text-sm">$80,900.00</span>
+          </div>
+          <div>
+            <span class="text-zinc-400 block text-[11px]">Perubahan Keseluruhan</span>
+            <span id="summaryTrend" class="font-bold text-emerald-400 tabular text-sm">+7.92% (+$6,440.00)</span>
+          </div>
+        </div>
+
+        <!-- Canvas Container -->
+        <div class="relative w-full h-[360px] sm:h-[400px]">
+          <canvas id="marketChart"></canvas>
+        </div>
+
+        <!-- Friendly Footer Note -->
+        <div class="pt-3 border-t border-white/[0.06] flex items-center justify-between text-xs text-zinc-400">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+            <span>Grafik diperbarui secara otomatis dengan data pasar resmi</span>
+          </div>
+          <div class="flex items-center gap-4 text-[11px]">
+            <span class="flex items-center gap-1.5">
+              <span class="w-3 h-0.5 bg-emerald-400 rounded-full inline-block"></span> Harga Spot (USD)
+            </span>
+            <span class="flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 bg-emerald-500/20 border border-emerald-500/40 rounded-sm inline-block"></span> Volume Transaksi
+            </span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- RIGHT: LIVE TRADES & MARKET SUMMARY (4 COLS) -->
+      <div class="lg:col-span-4 flex flex-col space-y-6">
+        
+        <!-- Live Trades Widget -->
+        <div class="bg-dark-card rounded-xl card-border p-4 flex-1 flex flex-col justify-between">
+          <div>
+            <!-- Header -->
+            <div class="flex items-center justify-between pb-3 border-b border-white/[0.06]">
+              <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 live-dot"></span>
+                <h3 class="text-sm font-bold text-white tracking-tight">Transaksi Terkini (Live Trades)</h3>
+              </div>
+              <button id="btnPauseStream" onclick="toggleStream()" class="text-[11px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors">
+                Jeda
+              </button>
+            </div>
+
+            <!-- Table of Live Trades -->
+            <div class="mt-3 overflow-hidden">
+              <table class="w-full text-left text-xs">
+                <thead>
+                  <tr class="text-[11px] text-zinc-400 border-b border-white/[0.04] pb-1">
+                    <th class="py-1.5 font-medium">Waktu</th>
+                    <th class="py-1.5 font-medium">Tipe</th>
+                    <th class="py-1.5 font-medium text-right">Harga (USD)</th>
+                    <th class="py-1.5 font-medium text-right">Jumlah</th>
+                  </tr>
+                </thead>
+                <tbody id="liveTradesBody" class="divide-y divide-white/[0.03] tabular">
+                  <!-- Generated via JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="pt-3 border-t border-white/[0.04] text-[11px] text-zinc-400 text-center">
+            Pembaruan langsung dari bursa spot global
+          </div>
+        </div>
+
+        <!-- Market Statistics Summary Card -->
+        <div class="bg-dark-card rounded-xl card-border p-4 space-y-3">
+          <h3 class="text-xs font-bold text-zinc-300 uppercase tracking-wider pb-2 border-b border-white/[0.06]">
+            Ringkasan Statistik Pasar
+          </h3>
+          
+          <div class="space-y-2.5 text-xs">
+            <div class="flex justify-between items-center">
+              <span class="text-zinc-400">Rekor Tertinggi (ATH)</span>
+              <div class="text-right">
+                <span id="statAth" class="font-semibold text-zinc-200 tabular">$108,900.00</span>
+                <span id="statAthDiff" class="text-[10px] text-rose-400 ml-1 tabular">(-19.5%)</span>
+              </div>
+            </div>
+
+            <div class="flex justify-between items-center">
+              <span class="text-zinc-400">Kapitalisasi Pasar (Market Cap)</span>
+              <span id="statMarketCap" class="font-semibold text-zinc-200 tabular">$1.73 Triliun</span>
+            </div>
+
+            <div class="flex justify-between items-center">
+              <span class="text-zinc-400">Dominansi Pasar</span>
+              <span id="statDominance" class="font-semibold text-amber-400 tabular">56.8%</span>
+            </div>
+
+            <div class="flex justify-between items-center">
+              <span class="text-zinc-400">Pasokan Beredar</span>
+              <span id="statSupply" class="font-semibold text-zinc-200 tabular">19.78 Juta BTC</span>
+            </div>
+
+            <div class="flex justify-between items-center">
+              <span class="text-zinc-400">Perubahan 7 Hari</span>
+              <span id="stat7dChange" class="font-semibold text-emerald-400 tabular">+4.25%</span>
+            </div>
+
+            <div class="flex justify-between items-center">
+              <span class="text-zinc-400">Estimasi Biaya Jaringan</span>
+              <span id="statAvgFee" class="font-semibold text-zinc-300 tabular">$1.85 / transaksi</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </section>
+
+    <!-- ========================================== -->
+    <!-- 3. HISTORICAL DATA TABLE (RAMAH & BERSIH) -->
+    <!-- ========================================== -->
+    <section class="bg-dark-card rounded-xl card-border p-5 space-y-4">
+      
+      <!-- Table Header & Actions -->
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-white/[0.06]">
+        <div>
+          <div class="flex items-center gap-2">
+            <h3 class="text-base font-bold text-white tracking-tight">Riwayat Harga Harian & Aktivitas Jaringan</h3>
+            <span class="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded font-medium">30 Hari Terakhir</span>
+          </div>
+          <p class="text-xs text-zinc-400 mt-0.5">Ringkasan harga pembukaan, tertinggi, terendah, penutupan, volume, serta transaksi harian.</p>
+        </div>
+
+        <!-- Search & Download Actions -->
+        <div class="flex items-center gap-3">
+          <!-- Search input -->
+          <div class="relative">
+            <input 
+              type="text" 
+              id="tableSearch" 
+              oninput="handleTableSearch(this.value)"
+              placeholder="Cari tanggal atau harga..." 
+              class="w-48 sm:w-56 bg-[#14171f] text-xs text-zinc-200 placeholder-zinc-500 px-3 py-1.5 rounded-lg border border-white/[0.08] focus:outline-none focus:border-amber-500/50"
+            />
+            <span class="absolute right-2.5 top-2 text-zinc-500 text-xs">🔍</span>
+          </div>
+
+          <!-- Download CSV Button -->
+          <button 
+            onclick="downloadDataCSV()" 
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold text-xs transition-colors shadow-sm"
+            title="Unduh data dalam format CSV"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+            </svg>
+            Unduh CSV
+          </button>
+        </div>
+      </div>
+
+      <!-- Responsive Table Container -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead>
+            <tr class="text-[11px] text-zinc-400 uppercase tracking-wider bg-[#14171f] border-y border-white/[0.06]">
+              <th class="py-2.5 px-3 font-semibold">Tanggal</th>
+              <th class="py-2.5 px-3 font-semibold text-right">Harga Buka</th>
+              <th class="py-2.5 px-3 font-semibold text-right">Tertinggi</th>
+              <th class="py-2.5 px-3 font-semibold text-right">Terendah</th>
+              <th class="py-2.5 px-3 font-semibold text-right">Harga Tutup</th>
+              <th class="py-2.5 px-3 font-semibold text-right">Perubahan</th>
+              <th class="py-2.5 px-3 font-semibold text-right">Volume</th>
+              <th class="py-2.5 px-3 font-semibold text-right">Transaksi Harian</th>
+            </tr>
+          </thead>
+          <tbody id="historyTableBody" class="divide-y divide-white/[0.04] tabular">
+            <!-- Populated via JavaScript -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pagination & Status -->
+      <div class="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-white/[0.06] text-xs text-zinc-400">
+        <div id="tableRecordInfo">
+          Menampilkan baris 1 - 10 dari 30 hari riwayat pasar
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button id="btnPrevPage" onclick="changeTablePage(-1)" class="px-2.5 py-1 rounded bg-[#14171f] border border-white/[0.08] hover:bg-white/[0.05] disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-zinc-300">
+            Sebelumnya
+          </button>
+          <span id="pageIndicator" class="px-2 font-medium text-zinc-300">1 / 3</span>
+          <button id="btnNextPage" onclick="changeTablePage(1)" class="px-2.5 py-1 rounded bg-[#14171f] border border-white/[0.08] hover:bg-white/[0.05] disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-zinc-300">
+            Berikutnya
+          </button>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- ========================================== -->
+  <!-- FOOTER (BERSIH & PROFESSIONAL) -->
+  <!-- ========================================== -->
+  <footer class="mt-8 border-t border-white/[0.08] bg-[#090a0d] py-6 text-xs text-zinc-400">
+    <div class="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-2">
+        <div class="w-5 h-5 rounded bg-amber-500 flex items-center justify-center text-zinc-950 font-bold text-xs">₿</div>
+        <span class="font-semibold text-zinc-300">Bitcoin Market Hub</span>
+        <span>•</span>
+        <span>Platform Pemantauan Pasar & Aktivitas Jaringan Bitcoin</span>
+      </div>
+      <div class="flex items-center gap-4 text-zinc-400">
+        <span>Pembaruan Real-Time (24/7)</span>
+        <span>•</span>
+        <span>Zona Waktu: UTC</span>
+        <span>•</span>
+        <span>Data Pasar Terverifikasi</span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ========================================== -->
+  <!-- JAVASCRIPT LOGIC & INTERACTIVITY -->
+  <!-- ========================================== -->
+  <script>
+    // --- STATE MANAGEMENT ---
+    let currentAsset = 'BTC';
+    let currentTimeframe = '30D';
+    let chartViewMode = 'line';
+    let showVolume = true;
+    let streamPaused = false;
+    let streamInterval = null;
+    let tableCurrentPage = 1;
+    const tablePageSize = 10;
+    let tableSearchQuery = '';
+
+    // Full 30 days history data for realistic view
+    const btc30DaysHistory = [
+      { date: '18 Sep 2026', open: 85590.20, high: 88120.00, low: 85410.50, close: 87650.01, change: 2.41, volume: 861.42, tx: 345612 },
+      { date: '17 Sep 2026', open: 84920.00, high: 86100.00, low: 84300.20, close: 85590.20, change: 0.79, volume: 924.80, tx: 338900 },
+      { date: '16 Sep 2026', open: 84150.50, high: 85200.00, low: 83800.00, close: 84920.00, change: 0.91, volume: 812.30, tx: 341200 },
+      { date: '15 Sep 2026', open: 83800.00, high: 84600.00, low: 83100.00, close: 84150.50, change: 0.42, volume: 890.15, tx: 329800 },
+      { date: '14 Sep 2026', open: 84600.00, high: 84900.00, low: 83400.00, close: 83800.00, change: -0.95, volume: 975.40, tx: 335400 },
+      { date: '13 Sep 2026', open: 84200.00, high: 85100.00, low: 83900.00, close: 84600.00, change: 0.48, volume: 745.20, tx: 318900 },
+      { date: '12 Sep 2026', open: 83900.00, high: 84400.00, low: 83500.00, close: 84200.00, change: 0.36, volume: 720.10, tx: 312400 },
+      { date: '11 Sep 2026', open: 83100.00, high: 84200.00, low: 82800.00, close: 83900.00, change: 0.96, volume: 1045.60, tx: 352100 },
+      { date: '10 Sep 2026', open: 82500.00, high: 83400.00, low: 82100.00, close: 83100.00, change: 0.73, volume: 980.20, tx: 344200 },
+      { date: '09 Sep 2026', open: 81900.00, high: 82800.00, low: 81400.00, close: 82500.00, change: 0.73, volume: 890.75, tx: 339100 },
+      { date: '08 Sep 2026', open: 82800.00, high: 83200.00, low: 81700.00, close: 81900.00, change: -1.09, volume: 815.40, tx: 331400 },
+      { date: '07 Sep 2026', open: 83500.00, high: 83900.00, low: 82400.00, close: 82800.00, change: -0.84, volume: 790.30, tx: 326800 },
+      { date: '06 Sep 2026', open: 83100.00, high: 84100.00, low: 82900.00, close: 83500.00, change: 0.48, volume: 760.10, tx: 321500 },
+      { date: '05 Sep 2026', open: 82600.00, high: 83400.00, low: 82100.00, close: 83100.00, change: 0.61, volume: 810.90, tx: 334000 },
+      { date: '04 Sep 2026', open: 82900.00, high: 83500.00, low: 82200.00, close: 82600.00, change: -0.36, volume: 845.20, tx: 337800 },
+      { date: '03 Sep 2026', open: 82100.00, high: 83200.00, low: 81800.00, close: 82900.00, change: 0.97, volume: 890.50, tx: 342100 },
+      { date: '02 Sep 2026', open: 81800.00, high: 82600.00, low: 81300.00, close: 82100.00, change: 0.37, volume: 820.40, tx: 336500 },
+      { date: '01 Sep 2026', open: 81200.00, high: 82100.00, low: 80900.00, close: 81800.00, change: 0.74, volume: 910.30, tx: 345200 },
+      { date: '31 Agu 2026', open: 81700.00, high: 82300.00, low: 81000.00, close: 81200.00, change: -0.61, volume: 770.80, tx: 328900 },
+      { date: '30 Agu 2026', open: 81400.00, high: 82200.00, low: 81100.00, close: 81700.00, change: 0.37, volume: 740.50, tx: 321400 },
+      { date: '29 Agu 2026', open: 81900.00, high: 82400.00, low: 81200.00, close: 81400.00, change: -0.61, volume: 785.20, tx: 324100 },
+      { date: '28 Agu 2026', open: 81500.00, high: 82200.00, low: 81100.00, close: 81900.00, change: 0.49, volume: 830.10, tx: 332800 },
+      { date: '27 Agu 2026', open: 81100.00, high: 81800.00, low: 80800.00, close: 81500.00, change: 0.49, volume: 795.40, tx: 328400 },
+      { date: '26 Agu 2026', open: 81600.00, high: 81900.00, low: 80900.00, close: 81100.00, change: -0.61, volume: 812.90, tx: 327100 },
+      { date: '25 Agu 2026', open: 81200.00, high: 81900.00, low: 80850.00, close: 81600.00, change: 0.49, volume: 750.30, tx: 322900 },
+      { date: '24 Agu 2026', open: 80900.00, high: 81600.00, low: 80600.00, close: 81200.00, change: 0.37, volume: 840.60, tx: 334500 },
+      { date: '23 Agu 2026', open: 81300.00, high: 81700.00, low: 80700.00, close: 80900.00, change: -0.49, volume: 720.80, tx: 319200 },
+      { date: '22 Agu 2026', open: 81800.00, high: 82100.00, low: 81000.00, close: 81300.00, change: -0.61, volume: 740.20, tx: 320500 },
+      { date: '21 Agu 2026', open: 81400.00, high: 82000.00, low: 81100.00, close: 81800.00, change: 0.49, volume: 775.40, tx: 326700 },
+      { date: '20 Agu 2026', open: 81000.00, high: 81600.00, low: 80700.00, close: 81400.00, change: 0.49, volume: 760.10, tx: 324000 }
+    ];
+
+    const eth30DaysHistory = [
+      { date: '18 Sep 2026', open: 2590.20, high: 2680.00, low: 2580.40, close: 2642.80, change: 1.85, volume: 10745.50, tx: 1120400 },
+      { date: '17 Sep 2026', open: 2575.00, high: 2635.00, low: 2560.10, close: 2590.20, change: 0.59, volume: 11200.30, tx: 1105000 },
+      { date: '16 Sep 2026', open: 2540.50, high: 2590.00, low: 2530.00, close: 2575.00, change: 1.36, volume: 9850.40, tx: 1089000 },
+      { date: '15 Sep 2026', open: 2560.00, high: 2585.00, low: 2520.00, close: 2540.50, change: -0.76, volume: 10450.20, tx: 1075000 },
+      { date: '14 Sep 2026', open: 2590.00, high: 2610.00, low: 2545.00, close: 2560.00, change: -1.16, volume: 11300.80, tx: 1092000 },
+      { date: '13 Sep 2026', open: 2570.00, high: 2615.00, low: 2550.00, close: 2590.00, change: 0.78, volume: 9650.10, tx: 1064000 },
+      { date: '12 Sep 2026', open: 2550.00, high: 2585.00, low: 2535.00, close: 2570.00, change: 0.78, volume: 9400.50, tx: 1052000 },
+      { date: '11 Sep 2026', open: 2520.00, high: 2570.00, low: 2505.00, close: 2550.00, change: 1.19, volume: 10850.20, tx: 1098000 },
+      { date: '10 Sep 2026', open: 2500.00, high: 2540.00, low: 2480.00, close: 2520.00, change: 0.80, volume: 10200.70, tx: 1076000 },
+      { date: '09 Sep 2026', open: 2485.00, high: 2520.00, low: 2470.00, close: 2500.00, change: 0.60, volume: 9750.30, tx: 1065000 }
+    ];
+
+    const initialBtcTrades = [
+      { time: '11:45:12', side: 'BUY', price: 87650.01, size: 0.1450 },
+      { time: '11:45:11', side: 'BUY', price: 87649.80, size: 0.8200 },
+      { time: '11:45:09', side: 'SELL', price: 87648.50, size: 0.0520 },
+      { time: '11:45:07', side: 'BUY', price: 87648.90, size: 1.2500 },
+      { time: '11:45:05', side: 'SELL', price: 87647.20, size: 0.3340 },
+      { time: '11:45:03', side: 'BUY', price: 87648.00, size: 0.6120 }
+    ];
+
+    const initialEthTrades = [
+      { time: '11:45:12', side: 'BUY', price: 2642.80, size: 2.4500 },
+      { time: '11:45:10', side: 'BUY', price: 2642.50, size: 5.1200 },
+      { time: '11:45:08', side: 'SELL', price: 2641.90, size: 1.0500 },
+      { time: '11:45:06', side: 'BUY', price: 2642.20, size: 8.3000 },
+      { time: '11:45:04', side: 'SELL', price: 2641.50, size: 3.4200 },
+      { time: '11:45:01', side: 'BUY', price: 2642.00, size: 4.8100 }
+    ];
+
+    // --- ASSET DATA PROFILES ---
+    const assetData = {
+      BTC: {
+        symbol: 'BTC',
+        name: 'Bitcoin',
+        spotPrice: 87650.01,
+        change24h: 2.41,
+        change24hUsd: 2059.81,
+        high24h: 88120.00,
+        low24h: 85410.50,
+        volumeUsd: 75.50,
+        volumeAsset: 861.42,
+        txCount: 345612,
+        activeAddrs: 890140,
+        ath: 108900.00,
+        athDiff: -19.5,
+        marketCap: 1.73,
+        marketCapUnit: 'Triliun',
+        dominance: 56.8,
+        supply: '19.78 Juta BTC',
+        change7d: 4.25,
+        avgFee: '$1.85 / transaksi',
+        chartData30D: [
+          { date: '20 Agu', price: 81400, volume: 760 },
+          { date: '22 Agu', price: 81300, volume: 740 },
+          { date: '24 Agu', price: 81200, volume: 840 },
+          { date: '26 Agu', price: 81100, volume: 812 },
+          { date: '28 Agu', price: 81900, volume: 830 },
+          { date: '30 Agu', price: 81700, volume: 740 },
+          { date: '01 Sep', price: 81800, volume: 910 },
+          { date: '03 Sep', price: 82900, volume: 890 },
+          { date: '05 Sep', price: 83100, volume: 810 },
+          { date: '07 Sep', price: 82800, volume: 790 },
+          { date: '09 Sep', price: 82500, volume: 890 },
+          { date: '11 Sep', price: 83900, volume: 1045 },
+          { date: '13 Sep', price: 84600, volume: 745 },
+          { date: '15 Sep', price: 84150, volume: 890 },
+          { date: '16 Sep', price: 84920, volume: 812 },
+          { date: '17 Sep', price: 85590, volume: 924 },
+          { date: '18 Sep', price: 87650, volume: 861 }
+        ],
+        chartData24H: [
+          { date: '00:00', price: 85590, volume: 38 },
+          { date: '03:00', price: 85850, volume: 45 },
+          { date: '06:00', price: 86200, volume: 52 },
+          { date: '09:00', price: 85980, volume: 41 },
+          { date: '12:00', price: 86800, volume: 78 },
+          { date: '15:00', price: 87250, volume: 89 },
+          { date: '18:00', price: 87400, volume: 64 },
+          { date: '21:00', price: 87650, volume: 72 }
+        ],
+        historyRows: btc30DaysHistory
+      },
+      ETH: {
+        symbol: 'ETH',
+        name: 'Ethereum',
+        spotPrice: 2642.80,
+        change24h: 1.85,
+        change24hUsd: 48.10,
+        high24h: 2680.00,
+        low24h: 2580.40,
+        volumeUsd: 28.40,
+        volumeAsset: 10745.50,
+        txCount: 1120400,
+        activeAddrs: 450200,
+        ath: 4891.70,
+        athDiff: -46.0,
+        marketCap: 318.2,
+        marketCapUnit: 'Miliar',
+        dominance: 14.2,
+        supply: '120.40 Juta ETH',
+        change7d: 3.10,
+        avgFee: '$0.82 / transaksi',
+        chartData30D: [
+          { date: '20 Agu', price: 2470, volume: 8200 },
+          { date: '22 Agu', price: 2490, volume: 8900 },
+          { date: '24 Agu', price: 2460, volume: 7800 },
+          { date: '26 Agu', price: 2510, volume: 9200 },
+          { date: '28 Agu', price: 2540, volume: 9500 },
+          { date: '30 Agu', price: 2520, volume: 8700 },
+          { date: '01 Sep', price: 2550, volume: 9900 },
+          { date: '03 Sep', price: 2580, volume: 10100 },
+          { date: '05 Sep', price: 2570, volume: 9400 },
+          { date: '07 Sep', price: 2590, volume: 9800 },
+          { date: '09 Sep', price: 2500, volume: 9750 },
+          { date: '11 Sep', price: 2550, volume: 10850 },
+          { date: '13 Sep', price: 2590, volume: 9650 },
+          { date: '15 Sep', price: 2540, volume: 10450 },
+          { date: '16 Sep', price: 2575, volume: 9850 },
+          { date: '17 Sep', price: 2590, volume: 11200 },
+          { date: '18 Sep', price: 2642, volume: 10745 }
+        ],
+        chartData24H: [
+          { date: '00:00', price: 2590, volume: 950 },
+          { date: '03:00', price: 2605, volume: 1100 },
+          { date: '06:00', price: 2620, volume: 1350 },
+          { date: '09:00', price: 2615, volume: 980 },
+          { date: '12:00', price: 2630, volume: 1420 },
+          { date: '15:00', price: 2650, volume: 1680 },
+          { date: '18:00', price: 2640, volume: 1250 },
+          { date: '21:00', price: 2642, volume: 1400 }
+        ],
+        historyRows: eth30DaysHistory
+      }
+    };
+
+    let liveTradesList = [...initialBtcTrades];
+
+    // --- CHART INSTANCE ---
+    let chartInstance = null;
+
+    function initChart() {
+      const ctx = document.getElementById('marketChart').getContext('2d');
+      const dataSet = assetData[currentAsset];
+      const series = currentTimeframe === '24H' ? dataSet.chartData24H : dataSet.chartData30D;
+
+      const labels = series.map(d => d.date);
+      const prices = series.map(d => d.price);
+      const volumes = series.map(d => d.volume);
+
+      // Create gradient for price line
+      const gradient = ctx.createLinearGradient(0, 0, 0, 360);
+      gradient.addColorStop(0, 'rgba(16, 185, 129, 0.25)');
+      gradient.addColorStop(1, 'rgba(16, 185, 129, 0.00)');
+
+      chartInstance = new Chart(ctx, {
+        type: chartViewMode === 'line' ? 'line' : 'bar',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              type: chartViewMode === 'line' ? 'line' : 'bar',
+              label: `Harga ${currentAsset} (USD)`,
+              data: prices,
+              borderColor: '#10b981',
+              backgroundColor: chartViewMode === 'line' ? gradient : 'rgba(16, 185, 129, 0.70)',
+              borderWidth: 3,
+              fill: chartViewMode === 'line',
+              tension: 0.30,
+              pointRadius: chartViewMode === 'line' ? 4 : 0,
+              pointHoverRadius: 7,
+              pointBackgroundColor: '#34d399',
+              pointBorderColor: '#090a0d',
+              pointBorderWidth: 2,
+              yAxisID: 'y',
+              order: 1
+            },
+            {
+              type: 'bar',
+              label: `Volume (${currentAsset})`,
+              data: showVolume ? volumes : [],
+              backgroundColor: 'rgba(255, 255, 255, 0.08)',
+              hoverBackgroundColor: 'rgba(52, 211, 153, 0.30)',
+              borderRadius: 3,
+              yAxisID: 'yVolume',
+              order: 2
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false, // Instant zero-delay rendering for solid crisp visibility
+          interaction: {
+            mode: 'index',
+            intersect: false,
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#181b24',
+              titleColor: '#e4e4e7',
+              bodyColor: '#a1a1aa',
+              borderColor: 'rgba(255, 255, 255, 0.15)',
+              borderWidth: 1,
+              padding: 10,
+              boxPadding: 4,
+              usePointStyle: true,
+              callbacks: {
+                label: function(context) {
+                  if (context.dataset.yAxisID === 'y') {
+                    return ` Harga: $${context.raw.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+                  } else {
+                    return ` Volume: ${context.raw.toLocaleString('en-US')} ${currentAsset}`;
+                  }
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              grid: { color: 'rgba(255, 255, 255, 0.04)' },
+              ticks: { color: '#71717a', font: { size: 11, family: 'Inter' } }
+            },
+            y: {
+              position: 'left',
+              grace: '8%',
+              grid: { color: 'rgba(255, 255, 255, 0.05)' },
+              ticks: {
+                color: '#34d399',
+                font: { size: 11, family: 'JetBrains Mono' },
+                callback: value => '$' + value.toLocaleString()
+              }
+            },
+            yVolume: {
+              position: 'right',
+              beginAtZero: true,
+              grid: { display: false },
+              ticks: {
+                color: '#71717a',
+                font: { size: 10, family: 'JetBrains Mono' },
+                callback: value => (value >= 1000 ? (value/1000).toFixed(1) + 'k' : value)
+              },
+              max: Math.max(...volumes) * 3
+            }
+          }
+        }
+      });
+    }
+
+    function updateChart() {
+      if (!chartInstance) return;
+      const dataSet = assetData[currentAsset];
+      const series = currentTimeframe === '24H' ? dataSet.chartData24H : dataSet.chartData30D;
+
+      chartInstance.data.labels = series.map(d => d.date);
+      chartInstance.data.datasets[0].data = series.map(d => d.price);
+      chartInstance.data.datasets[0].label = `Harga ${currentAsset} (USD)`;
+      chartInstance.data.datasets[0].type = chartViewMode === 'line' ? 'line' : 'bar';
+      chartInstance.data.datasets[0].fill = chartViewMode === 'line';
+
+      const volumes = series.map(d => d.volume);
+      chartInstance.data.datasets[1].data = showVolume ? volumes : [];
+      chartInstance.data.datasets[1].label = `Volume (${currentAsset})`;
+      chartInstance.options.scales.yVolume.max = Math.max(...volumes) * 3;
+
+      chartInstance.update();
+
+      const prices = series.map(d => d.price);
+      const high = Math.max(...prices);
+      const low = Math.min(...prices);
+      const firstPrice = prices[0];
+      const lastPrice = prices[prices.length - 1];
+      const diffPrice = lastPrice - firstPrice;
+      const diffPct = (diffPrice / firstPrice) * 100;
+
+      document.getElementById('summaryHigh').textContent = '$' + high.toLocaleString('en-US', { minimumFractionDigits: 2 });
+      document.getElementById('summaryLow').textContent = '$' + low.toLocaleString('en-US', { minimumFractionDigits: 2 });
+      
+      const sign = diffPrice >= 0 ? '+' : '';
+      const trendEl = document.getElementById('summaryTrend');
+      trendEl.textContent = `${sign}${diffPct.toFixed(2)}% (${sign}$${Math.abs(diffPrice).toLocaleString('en-US', { minimumFractionDigits: 2 })})`;
+      trendEl.className = diffPrice >= 0 ? 'font-bold text-emerald-400 tabular text-sm' : 'font-bold text-rose-400 tabular text-sm';
+    }
+
+    function setChartType(type) {
+      chartViewMode = type;
+      document.getElementById('btnChartLine').className = type === 'line' 
+        ? 'px-2.5 py-1 rounded font-medium bg-white/[0.1] text-white transition-all'
+        : 'px-2.5 py-1 rounded font-medium text-zinc-400 hover:text-white transition-all';
+      
+      document.getElementById('btnChartCandle').className = type === 'bar'
+        ? 'px-2.5 py-1 rounded font-medium bg-white/[0.1] text-white transition-all'
+        : 'px-2.5 py-1 rounded font-medium text-zinc-400 hover:text-white transition-all';
+
+      updateChart();
+    }
+
+    function toggleVolumeSeries() {
+      showVolume = !showVolume;
+      const dot = document.getElementById('volumeCheckIcon');
+      if (showVolume) {
+        dot.className = 'w-2 h-2 rounded-full bg-emerald-400';
+      } else {
+        dot.className = 'w-2 h-2 rounded-full bg-zinc-600';
+      }
+      updateChart();
+    }
+
+    function switchTimeframe(tf) {
+      currentTimeframe = tf;
+      const buttons = ['24H', '7D', '30D', '1Y', 'ALL'];
+      buttons.forEach(b => {
+        const el = document.getElementById('tf' + b);
+        if (b === tf) {
+          el.className = 'tf-btn px-2.5 py-1 rounded text-xs font-semibold bg-white/[0.1] text-white shadow-sm transition-colors';
+        } else {
+          el.className = 'tf-btn px-2.5 py-1 rounded text-xs font-medium text-zinc-400 hover:text-white transition-colors';
+        }
+      });
+
+      const labelMap = {
+        '24H': '24 Jam Terakhir',
+        '7D': '7 Hari Terakhir',
+        '30D': '30 Hari Terakhir',
+        '1Y': '1 Tahun Terakhir',
+        'ALL': 'Seluruh Riwayat'
+      };
+      document.getElementById('chartPeriodLabel').textContent = labelMap[tf] || tf;
+      updateChart();
+      fetchChartData(currentAsset, tf);
+    }
+
+    function switchAsset(asset) {
+      currentAsset = asset;
+      const data = assetData[asset];
+
+      const btnBTC = document.getElementById('btnAssetBTC');
+      const btnETH = document.getElementById('btnAssetETH');
+
+      if (asset === 'BTC') {
+        btnBTC.className = 'flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold bg-amber-500 text-zinc-950 shadow-sm transition-all';
+        btnETH.className = 'flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium text-zinc-400 hover:text-white transition-all';
+        liveTradesList = [...initialBtcTrades];
+      } else {
+        btnETH.className = 'flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold bg-blue-500 text-white shadow-sm transition-all';
+        btnBTC.className = 'flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium text-zinc-400 hover:text-white transition-all';
+        liveTradesList = [...initialEthTrades];
+      }
+
+      document.getElementById('headerPrice').textContent = '$' + data.spotPrice.toLocaleString('en-US', { minimumFractionDigits: 2 });
+      document.getElementById('headerChangeBadge').innerHTML = (data.change24h >= 0 ? '▲ +' : '▼ ') + data.change24h + '%';
+
+      document.getElementById('cardSpotPrice').textContent = '$' + data.spotPrice.toLocaleString('en-US', { minimumFractionDigits: 2 });
+      document.getElementById('spotBadge').innerHTML = (data.change24h >= 0 ? '▲ +' : '▼ ') + data.change24h + '%';
+      document.getElementById('rangeLow').textContent = '$' + data.low24h.toLocaleString('en-US', { minimumFractionDigits: 2 });
+      document.getElementById('rangeHigh').textContent = '$' + data.high24h.toLocaleString('en-US', { minimumFractionDigits: 2 });
+
+      document.getElementById('cardVolumeUsd').textContent = '$' + data.volumeUsd.toFixed(2) + ' Juta';
+      document.getElementById('cardVolumeAsset').textContent = data.volumeAsset.toLocaleString() + ' ' + asset;
+
+      document.getElementById('cardTxCount').textContent = data.txCount.toLocaleString();
+      document.getElementById('cardActiveAddrs').textContent = data.activeAddrs.toLocaleString() + ' Alamat';
+
+      // Update 24h range bar position
+      const rangeSpan = data.high24h - data.low24h;
+      if (rangeSpan > 0) {
+        const rangePct = Math.min(100, Math.max(0, ((data.spotPrice - data.low24h) / rangeSpan) * 100));
+        const rBar = document.getElementById('rangeBar');
+        if (rBar) rBar.style.width = rangePct.toFixed(0) + '%';
+      }
+
+      document.getElementById('statAth').textContent = '$' + data.ath.toLocaleString('en-US', { minimumFractionDigits: 2 });
+      document.getElementById('statAthDiff').textContent = `(${data.athDiff}%)`;
+      document.getElementById('statMarketCap').textContent = '$' + data.marketCap + ' ' + data.marketCapUnit;
+      document.getElementById('statDominance').textContent = data.dominance + '%';
+      document.getElementById('statSupply').textContent = data.supply;
+      document.getElementById('stat7dChange').textContent = (data.change7d >= 0 ? '+' : '') + data.change7d + '%';
+      document.getElementById('statAvgFee').textContent = data.avgFee;
+
+      document.getElementById('chartTitle').textContent = `Grafik Pergerakan Harga ${data.name}`;
+
+      tableCurrentPage = 1;
+      renderLiveTrades();
+      renderHistoryTable();
+      updateChart();
+
+      fetchKpiData(asset);
+      fetchChartData(asset, currentTimeframe);
+      fetchTradesData(asset);
+      fetchLedgerData(asset);
+    }
+
+    function renderLiveTrades() {
+      const tbody = document.getElementById('liveTradesBody');
+      if (!tbody) return;
+      tbody.innerHTML = '';
+
+      liveTradesList.slice(0, 6).forEach((trade, idx) => {
+        const tr = document.createElement('tr');
+        const isBuy = trade.side === 'BUY';
+        
+        tr.className = `py-1.5 transition-colors ${idx === 0 ? (isBuy ? 'flash-buy' : 'flash-sell') : ''}`;
+        tr.innerHTML = `
+          <td class="py-2 text-zinc-400 font-mono text-[11px]">${trade.time}</td>
+          <td class="py-2">
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${isBuy ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/15 text-rose-400 border border-rose-500/20'}">
+              ${isBuy ? 'BELI' : 'JUAL'}
+            </span>
+          </td>
+          <td class="py-2 text-right font-medium text-zinc-200 font-mono text-[11px]">$${trade.price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+          <td class="py-2 text-right font-mono text-zinc-300 text-[11px]">${trade.size.toFixed(4)} ${currentAsset}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function generateNextTrade() {
+      if (streamPaused) return;
+
+      const now = new Date();
+      const timeStr = now.toTimeString().split(' ')[0];
+      const isBuy = Math.random() > 0.42;
+      const basePrice = assetData[currentAsset].spotPrice;
+      const delta = (Math.random() - 0.48) * (currentAsset === 'BTC' ? 8.5 : 0.8);
+      const newPrice = Number((basePrice + delta).toFixed(2));
+      const size = Number((Math.random() * (currentAsset === 'BTC' ? 0.9 : 4.5) + 0.02).toFixed(4));
+
+      assetData[currentAsset].spotPrice = newPrice;
+
+      const spotEl = document.getElementById('cardSpotPrice');
+      if (spotEl) spotEl.textContent = '$' + newPrice.toLocaleString('en-US', { minimumFractionDigits: 2 });
+      const hdrPrice = document.getElementById('headerPrice');
+      if (hdrPrice) hdrPrice.textContent = '$' + newPrice.toLocaleString('en-US', { minimumFractionDigits: 2 });
+
+      liveTradesList.unshift({
+        time: timeStr,
+        side: isBuy ? 'BUY' : 'SELL',
+        price: newPrice,
+        size: size
+      });
+
+      if (liveTradesList.length > 20) liveTradesList.pop();
+      renderLiveTrades();
+    }
+
+    function toggleStream() {
+      streamPaused = !streamPaused;
+      const btn = document.getElementById('btnPauseStream');
+      if (streamPaused) {
+        btn.textContent = 'Lanjutkan';
+        btn.className = 'text-[11px] px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-bold transition-colors';
+      } else {
+        btn.textContent = 'Jeda';
+        btn.className = 'text-[11px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors';
+      }
+    }
+
+    function renderHistoryTable() {
+      const tbody = document.getElementById('historyTableBody');
+      if (!tbody) return;
+      const allRows = assetData[currentAsset].historyRows;
+
+      let filtered = allRows;
+      if (tableSearchQuery.trim()) {
+        const q = tableSearchQuery.toLowerCase();
+        filtered = allRows.filter(r => 
+          r.date.toLowerCase().includes(q) || 
+          r.close.toString().includes(q) || 
+          r.open.toString().includes(q)
+        );
+      }
+
+      const totalPages = Math.max(1, Math.ceil(filtered.length / tablePageSize));
+      if (tableCurrentPage > totalPages) tableCurrentPage = totalPages;
+
+      const startIndex = (tableCurrentPage - 1) * tablePageSize;
+      const pageRows = filtered.slice(startIndex, startIndex + tablePageSize);
+
+      tbody.innerHTML = '';
+
+      if (pageRows.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="8" class="text-center py-6 text-zinc-500">
+              Tidak ditemukan data yang sesuai dengan pencarian "${tableSearchQuery}"
+            </td>
+          </tr>
+        `;
+      } else {
+        pageRows.forEach(row => {
+          const isUp = row.change >= 0;
+          const tr = document.createElement('tr');
+          tr.className = 'hover:bg-white/[0.02] transition-colors';
+          tr.innerHTML = `
+            <td class="py-2.5 px-3 font-medium text-zinc-300">${row.date}</td>
+            <td class="py-2.5 px-3 text-right font-mono text-zinc-400">$${row.open.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+            <td class="py-2.5 px-3 text-right font-mono text-emerald-400/90">$${row.high.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+            <td class="py-2.5 px-3 text-right font-mono text-rose-400/90">$${row.low.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+            <td class="py-2.5 px-3 text-right font-mono font-semibold text-white">$${row.close.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+            <td class="py-2.5 px-3 text-right font-mono">
+              <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold ${isUp ? 'text-emerald-400 bg-emerald-500/10' : 'text-rose-400 bg-rose-500/10'}">
+                ${isUp ? '+' : ''}${row.change.toFixed(2)}%
+              </span>
+            </td>
+            <td class="py-2.5 px-3 text-right font-mono text-zinc-300">${row.volume.toLocaleString('en-US', { minimumFractionDigits: 2 })} ${currentAsset}</td>
+            <td class="py-2.5 px-3 text-right font-mono text-zinc-400">${row.tx.toLocaleString()}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
+
+      document.getElementById('tableRecordInfo').textContent = `Menampilkan baris ${filtered.length > 0 ? startIndex + 1 : 0} - ${Math.min(startIndex + tablePageSize, filtered.length)} dari ${filtered.length} hari riwayat pasar`;
+      document.getElementById('pageIndicator').textContent = `${tableCurrentPage} / ${totalPages}`;
+      document.getElementById('btnPrevPage').disabled = (tableCurrentPage <= 1);
+      document.getElementById('btnNextPage').disabled = (tableCurrentPage >= totalPages);
+    }
+
+    function changeTablePage(delta) {
+      tableCurrentPage += delta;
+      renderHistoryTable();
+    }
+
+    function handleTableSearch(val) {
+      tableSearchQuery = val;
+      tableCurrentPage = 1;
+      renderHistoryTable();
+    }
+
+    function downloadDataCSV() {
+      // Direct server export with graceful client-side fallback
+      try {
+        const link = document.createElement('a');
+        link.href = `/api/export?format=csv&asset=${currentAsset}`;
+        link.download = `${currentAsset.toLowerCase()}_market_history_${new Date().toISOString().slice(0,10)}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } catch (err) {
+        const rows = assetData[currentAsset].historyRows;
+        let csvContent = 'data:text/csv;charset=utf-8,';
+        csvContent += 'Tanggal,Aset,Harga_Buka_USD,Tertinggi_USD,Terendah_USD,Harga_Tutup_USD,Perubahan_Persen,Volume_Koin,Total_Transaksi\n';
+
+        rows.forEach(r => {
+          csvContent += `${r.date},${currentAsset},${r.open},${r.high},${r.low},${r.close},${r.change},${r.volume},${r.tx}\n`;
+        });
+
+        const encodedUri = encodeURI(csvContent);
+        const fallbackLink = document.createElement('a');
+        fallbackLink.setAttribute('href', encodedUri);
+        fallbackLink.setAttribute('download', `${currentAsset.toLowerCase()}_market_history_${new Date().toISOString().slice(0,10)}.csv`);
+        document.body.appendChild(fallbackLink);
+        fallbackLink.click();
+        document.body.removeChild(fallbackLink);
+      }
+    }
+
+    function updateKpiView() {
+      const data = assetData[currentAsset];
+      const hdrPrice = document.getElementById('headerPrice');
+      if (hdrPrice) hdrPrice.textContent = '$' + data.spotPrice.toLocaleString('en-US', { minimumFractionDigits: 2 });
+      const hdrBadge = document.getElementById('headerChangeBadge');
+      if (hdrBadge) hdrBadge.innerHTML = (data.change24h >= 0 ? '▲ +' : '▼ ') + data.change24h + '%';
+
+      const spotPriceEl = document.getElementById('cardSpotPrice');
+      if (spotPriceEl) spotPriceEl.textContent = '$' + data.spotPrice.toLocaleString('en-US', { minimumFractionDigits: 2 });
+      const spotBadgeEl = document.getElementById('spotBadge');
+      if (spotBadgeEl) spotBadgeEl.innerHTML = (data.change24h >= 0 ? '▲ +' : '▼ ') + data.change24h + '%';
+      const rangeLowEl = document.getElementById('rangeLow');
+      if (rangeLowEl) rangeLowEl.textContent = '$' + data.low24h.toLocaleString('en-US', { minimumFractionDigits: 2 });
+      const rangeHighEl = document.getElementById('rangeHigh');
+      if (rangeHighEl) rangeHighEl.textContent = '$' + data.high24h.toLocaleString('en-US', { minimumFractionDigits: 2 });
+
+      const volUsdEl = document.getElementById('cardVolumeUsd');
+      if (volUsdEl) volUsdEl.textContent = '$' + (typeof data.volumeUsd === 'number' ? data.volumeUsd.toFixed(2) : data.volumeUsd) + ' Juta';
+      const volAssetEl = document.getElementById('cardVolumeAsset');
+      if (volAssetEl) volAssetEl.textContent = data.volumeAsset.toLocaleString() + ' ' + currentAsset;
+
+      const txCountEl = document.getElementById('cardTxCount');
+      if (txCountEl) txCountEl.textContent = data.txCount.toLocaleString();
+      const activeAddrsEl = document.getElementById('cardActiveAddrs');
+      if (activeAddrsEl) activeAddrsEl.textContent = data.activeAddrs.toLocaleString() + ' Alamat';
+
+      const rangeSpan = data.high24h - data.low24h;
+      if (rangeSpan > 0) {
+        const rangePct = Math.min(100, Math.max(0, ((data.spotPrice - data.low24h) / rangeSpan) * 100));
+        const rBar = document.getElementById('rangeBar');
+        if (rBar) rBar.style.width = rangePct.toFixed(0) + '%';
+      }
+
+      if (data.ath) {
+        const athEl = document.getElementById('statAth');
+        if (athEl) athEl.textContent = '$' + data.ath.toLocaleString('en-US', { minimumFractionDigits: 2 });
+      }
+      if (data.athDiff !== undefined) {
+        const athDiffEl = document.getElementById('statAthDiff');
+        if (athDiffEl) athDiffEl.textContent = `(${data.athDiff}%)`;
+      }
+      if (data.marketCap) {
+        const mcEl = document.getElementById('statMarketCap');
+        if (mcEl) mcEl.textContent = '$' + data.marketCap + ' ' + (data.marketCapUnit || 'Triliun');
+      }
+      if (data.dominance !== undefined) {
+        const domEl = document.getElementById('statDominance');
+        if (domEl) domEl.textContent = data.dominance + '%';
+      }
+      if (data.supply) {
+        const supEl = document.getElementById('statSupply');
+        if (supEl) supEl.textContent = data.supply;
+      }
+      if (data.change7d !== undefined) {
+        const c7El = document.getElementById('stat7dChange');
+        if (c7El) c7El.textContent = (data.change7d >= 0 ? '+' : '') + data.change7d + '%';
+      }
+      if (data.avgFee) {
+        const feeEl = document.getElementById('statAvgFee');
+        if (feeEl) feeEl.textContent = data.avgFee;
+      }
+    }
+
+    async function fetchKpiData(asset) {
+      try {
+        const resp = await fetch(`/api/kpi?asset=${asset}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data || !data.spot_price) return;
+        assetData[asset].spotPrice = data.spot_price;
+        assetData[asset].change24h = data.change_24h;
+        assetData[asset].change24hUsd = data.change_24h_usd;
+        assetData[asset].high24h = data.high_24h;
+        assetData[asset].low24h = data.low_24h;
+        assetData[asset].volumeUsd = data.volume_usd;
+        assetData[asset].volumeAsset = data.volume_asset;
+        if (data.tx_count) assetData[asset].txCount = data.tx_count;
+        if (data.active_addrs) assetData[asset].activeAddrs = data.active_addrs;
+        if (data.market_cap) assetData[asset].marketCap = data.market_cap;
+        if (data.dominance) assetData[asset].dominance = data.dominance;
+        if (data.ath) assetData[asset].ath = data.ath;
+        if (data.ath_diff !== undefined) assetData[asset].athDiff = data.ath_diff;
+        if (data.supply) assetData[asset].supply = data.supply;
+        if (data.change_7d !== undefined) assetData[asset].change7d = data.change_7d;
+        if (data.avg_fee) assetData[asset].avgFee = data.avg_fee;
+
+        if (asset === currentAsset) {
+          updateKpiView();
+        }
+      } catch (err) {
+        console.warn("Using offline fallback for KPI:", err);
+      }
+    }
+
+    async function fetchChartData(asset, tf) {
+      try {
+        const resp = await fetch(`/api/chart?asset=${asset}&range=${tf}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data || !Array.isArray(data.series) || data.series.length === 0) return;
+
+        if (tf === '24H') {
+          assetData[asset].chartData24H = data.series;
+        } else {
+          assetData[asset].chartData30D = data.series;
+        }
+
+        if (asset === currentAsset && tf === currentTimeframe) {
+          updateChart();
+        }
+      } catch (err) {
+        console.warn("Using offline fallback for chart:", err);
+      }
+    }
+
+    async function fetchTradesData(asset) {
+      try {
+        const resp = await fetch(`/api/trades?asset=${asset}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data || !Array.isArray(data.trades) || data.trades.length === 0) return;
+
+        if (asset === currentAsset) {
+          liveTradesList = [...data.trades];
+          renderLiveTrades();
+        }
+      } catch (err) {
+        console.warn("Using offline fallback for trades:", err);
+      }
+    }
+
+    async function fetchLedgerData(asset) {
+      try {
+        const resp = await fetch(`/api/ledger?asset=${asset}&limit=30`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data || !Array.isArray(data.rows) || data.rows.length === 0) return;
+
+        assetData[asset].historyRows = data.rows;
+        if (asset === currentAsset) {
+          renderHistoryTable();
+        }
+      } catch (err) {
+        console.warn("Using offline fallback for ledger:", err);
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      initChart();
+      renderLiveTrades();
+      renderHistoryTable();
+
+      fetchKpiData(currentAsset);
+      fetchChartData(currentAsset, currentTimeframe);
+      fetchTradesData(currentAsset);
+      fetchLedgerData(currentAsset);
+
+      streamInterval = setInterval(generateNextTrade, 2000);
+    });
+  </script>
+</body>
+</html>
