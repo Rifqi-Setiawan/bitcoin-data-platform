@@ -49,3 +49,4 @@ jupyter lab
 | Notebook | Description | Data Sources |
 | :--- | :--- | :--- |
 | `bitcoin_research_baseline.ipynb` | Baseline exploratory analysis examining price-volume behavior, network transaction throughput, active address participation, and empirical correlation between trading volume and network velocity. | `mart_btc_market_and_network_daily` |
+| `investment_strategy_backtest.ipynb` | Systematic backtesting and benchmarking comparing Dynamic Reserve DCA against Blind DCA and Lump Sum Buy & Hold across complete market cycles. | `mart_btc_investment_signals_daily` |
