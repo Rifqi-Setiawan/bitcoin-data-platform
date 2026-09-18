@@ -147,6 +147,18 @@ Each phase solves the next observed problem. A phase is complete only when its o
 - **Definition of done:** Core pipeline is unaffected by diagnostic service outage; outputs are traceable; service controls require explicit operator authorization; no automated write path exists.
 - **Interview outcome:** Explain where automated diagnostics help, where deterministic validation is safer, and how permission boundaries reduce operational risk.
 
+## Phase 12 — Investment data expansion: on-chain valuation, market sentiment & macro calendar
+
+- **Objective:** Expand data ingestion with three lightweight, zero-key public sources for autonomous investment signal generation: Coin Metrics MVRV ratio, Alternative.me Crypto Fear & Greed Index, and ForexFactory US high-impact economic calendar events.
+- **Prerequisites:** Conformed daily market and on-chain fact views, DuckDB analytical engine.
+- **Components:** Coin Metrics MVRV extension (`CapMVRVCur`), Sentiment client and contract validator (`fetch-sentiment`), Macro calendar client and contract validator (`fetch-macro-calendar`), DuckDB tables `raw_crypto_sentiment_daily` and `raw_macro_economic_events`, conformed view `mart_btc_investment_signals_daily`.
+- **Concepts:** On-chain valuation multiples (MVRV), sentiment indicators, event-driven macro awareness, multi-domain conformed modeling, tactical asset allocation signals.
+- **Expected output:** Clean ingestion subcommands, Parquet Hive partitioning with MVRV, conformed DuckDB mart calculating SMA-200, Mayer Multiple, and deterministic investment signals.
+- **Tests:** Contract parsing/validation, transient HTTP retry/backoff, rate limiting, timezone conversions, Parquet schema extension, analytical mart window aggregation and investment signal classification bands.
+- **Portfolio value:** Bridges pure data engineering with quantitative investment research and evidence-based signal generation.
+- **Definition of done:** All 3 data sources operational; DuckDB analytical view generates correct Mayer Multiple, MVRV, FNG, and signal classifications; zero API keys required; 100% test coverage with zero regression.
+- **Interview outcome:** Explain the mechanics of MVRV and Mayer Multiple, how multi-domain marts handle asynchronous cadences, and how deterministic signal classification avoids black-box ML pitfalls.
+
 ## Stage gates
 
 Do not advance merely because a phase is interesting. At each gate ask:

@@ -9,6 +9,8 @@ from typing import Any, cast
 
 import duckdb
 
+from bitcoin_data_platform.sources.macro_calendar_contract import MacroEvent
+from bitcoin_data_platform.sources.sentiment_contract import SentimentRecord
 from bitcoin_data_platform.time_range import format_canonical_utc, parse_iso_utc
 
 
@@ -514,8 +516,23 @@ class DuckDBManager:
         if existing_files:
             sql = f"""
             CREATE OR REPLACE VIEW fact_network_metrics_daily AS
-            SELECT * FROM read_parquet('{parquet_glob}', hive_partitioning=true);
+            SELECT *
+            FROM read_parquet('{parquet_glob}', hive_partitioning=true, union_by_name=true);
             """
+            try:
+                con.execute(sql)
+                cols = [
+                    col[0] for col in con.execute("DESCRIBE fact_network_metrics_daily;").fetchall()
+                ]
+                if "mvrv_ratio" not in cols:
+                    sql = f"""
+                    CREATE OR REPLACE VIEW fact_network_metrics_daily AS
+                    SELECT *, CAST(NULL AS DOUBLE) AS mvrv_ratio
+                    FROM read_parquet('{parquet_glob}', hive_partitioning=true, union_by_name=true);
+                    """
+                    con.execute(sql)
+            except Exception:
+                con.execute(sql)
         else:
             # Fallback view with full schema when no files are present yet
             sql = """
@@ -526,12 +543,13 @@ class DuckDBManager:
                 CAST(NULL AS TIMESTAMPTZ) AS metric_date_utc,
                 CAST(NULL AS BIGINT) AS transaction_count,
                 CAST(NULL AS BIGINT) AS active_addresses_count,
+                CAST(NULL AS DOUBLE) AS mvrv_ratio,
                 CAST(NULL AS TIMESTAMPTZ) AS ingested_at_utc,
                 CAST(NULL AS VARCHAR) AS source_run_id,
                 CAST(NULL AS INTEGER) AS year
             WHERE 1=0;
             """
-        con.execute(sql)
+            con.execute(sql)
 
     def create_cross_domain_mart_view(self) -> None:
         """Create or replace conformed cross-domain view mart_btc_market_and_network_daily."""
@@ -561,15 +579,160 @@ class DuckDBManager:
         """
         con.execute(sql)
 
+    def create_sentiment_table(self) -> None:
+        """Create raw_crypto_sentiment_daily table if not exists."""
+        con = self.get_connection()
+        sql = """
+        CREATE TABLE IF NOT EXISTS raw_crypto_sentiment_daily (
+            sentiment_date_utc DATE PRIMARY KEY,
+            fng_value INTEGER NOT NULL,
+            fng_classification VARCHAR NOT NULL,
+            ingested_at_utc TIMESTAMPTZ NOT NULL
+        );
+        """
+        con.execute(sql)
+
+    def insert_sentiment_records(self, records: Sequence[SentimentRecord]) -> int:
+        """Insert or replace sentiment records into raw_crypto_sentiment_daily."""
+        if not records:
+            return 0
+        con = self.get_connection()
+        self.create_sentiment_table()
+        rows = [
+            (
+                r.date_utc.date(),
+                r.value,
+                r.classification,
+                r.ingested_at_utc,
+            )
+            for r in records
+        ]
+        con.executemany(
+            """
+            INSERT OR REPLACE INTO raw_crypto_sentiment_daily (
+                sentiment_date_utc, fng_value, fng_classification, ingested_at_utc
+            ) VALUES (?, ?, ?, ?);
+            """,
+            rows,
+        )
+        return len(rows)
+
+    def create_macro_events_table(self) -> None:
+        """Create raw_macro_economic_events table if not exists."""
+        con = self.get_connection()
+        sql = """
+        CREATE TABLE IF NOT EXISTS raw_macro_economic_events (
+            event_id VARCHAR PRIMARY KEY,
+            country VARCHAR NOT NULL,
+            title VARCHAR NOT NULL,
+            impact VARCHAR NOT NULL,
+            scheduled_utc TIMESTAMPTZ NOT NULL,
+            forecast VARCHAR,
+            previous VARCHAR,
+            ingested_at_utc TIMESTAMPTZ NOT NULL
+        );
+        """
+        con.execute(sql)
+
+    def insert_macro_events(self, events: Sequence[MacroEvent]) -> int:
+        """Insert or replace macroeconomic events into raw_macro_economic_events."""
+        if not events:
+            return 0
+        con = self.get_connection()
+        self.create_macro_events_table()
+        rows = [
+            (
+                e.event_id,
+                e.country,
+                e.title,
+                e.impact,
+                e.scheduled_utc,
+                e.forecast,
+                e.previous,
+                e.ingested_at_utc,
+            )
+            for e in events
+        ]
+        con.executemany(
+            """
+            INSERT OR REPLACE INTO raw_macro_economic_events (
+                event_id, country, title, impact, scheduled_utc, forecast, previous, ingested_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            rows,
+        )
+        return len(rows)
+
+    def create_investment_signals_view(self) -> None:
+        """Create or replace conformed analytical mart mart_btc_investment_signals_daily."""
+        con = self.get_connection()
+        self.create_hourly_view()
+        self.create_daily_mart_view()
+        self.create_network_fact_view()
+        self.create_sentiment_table()
+        self.create_macro_events_table()
+
+        sql = """
+        CREATE OR REPLACE VIEW mart_btc_investment_signals_daily AS
+        WITH base AS (
+            SELECT
+                m.trade_date_utc,
+                m.close AS market_close_usd,
+                AVG(m.close) OVER (
+                    ORDER BY m.trade_date_utc ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
+                ) AS sma_200,
+                m.close / NULLIF(AVG(m.close) OVER (
+                    ORDER BY m.trade_date_utc ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
+                ), 0) AS mayer_multiple,
+                n.mvrv_ratio,
+                COALESCE(s.fng_value, 50) AS fng_value,
+                COALESCE(s.fng_classification, 'Neutral') AS fng_classification,
+                CASE WHEN e.event_date IS NOT NULL THEN TRUE ELSE FALSE END
+                    AS has_high_impact_macro_event
+            FROM mart_btc_usd_daily m
+            LEFT JOIN fact_network_metrics_daily n
+                ON CAST(m.trade_date_utc AS DATE) = CAST(n.metric_date_utc AS DATE)
+            LEFT JOIN raw_crypto_sentiment_daily s
+                ON CAST(m.trade_date_utc AS DATE) = s.sentiment_date_utc
+            LEFT JOIN (
+                SELECT DISTINCT CAST(scheduled_utc AS DATE) AS event_date
+                FROM raw_macro_economic_events
+                WHERE impact = 'High' AND country = 'USD'
+            ) e ON CAST(m.trade_date_utc AS DATE) = e.event_date
+        )
+        SELECT
+            trade_date_utc,
+            market_close_usd,
+            sma_200,
+            mayer_multiple,
+            mvrv_ratio,
+            fng_value,
+            fng_classification,
+            has_high_impact_macro_event,
+            CASE
+                WHEN mayer_multiple < 0.80 AND fng_value <= 25 THEN 'AGGRESSIVE_ACCUMULATE'
+                WHEN mayer_multiple < 1.00 OR mvrv_ratio < 1.20 THEN 'OPPORTUNISTIC_ACCUMULATE'
+                WHEN mayer_multiple > 2.40 OR mvrv_ratio > 3.50 THEN 'HARD_FREEZE'
+                WHEN mayer_multiple > 1.80 OR fng_value >= 85 THEN 'DEFENSIVE_RESERVE'
+                WHEN mayer_multiple BETWEEN 1.00 AND 1.80 THEN 'STANDARD_DCA'
+                ELSE 'STANDARD_DCA'
+            END AS investment_signal
+        FROM base;
+        """
+        con.execute(sql)
+
     def initialize(self) -> None:
         """Initialize database schema, tables, and views."""
         self.create_metadata_table()
         self.create_watermark_table()
         self.create_quality_checks_table()
+        self.create_sentiment_table()
+        self.create_macro_events_table()
         self.create_hourly_view()
         self.create_daily_mart_view()
         self.create_network_fact_view()
         self.create_cross_domain_mart_view()
+        self.create_investment_signals_view()
 
     def record_run(
         self,

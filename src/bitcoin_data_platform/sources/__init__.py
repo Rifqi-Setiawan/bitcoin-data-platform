@@ -32,6 +32,30 @@ from bitcoin_data_platform.sources.coinbase_contract import (
     validate_candle,
     validate_candle_payload,
 )
+from bitcoin_data_platform.sources.macro_calendar_client import (
+    MacroCalendarClient,
+    MacroCalendarClientError,
+    MacroHTTPError,
+)
+from bitcoin_data_platform.sources.macro_calendar_contract import (
+    MacroContractViolationError,
+    MacroEvent,
+    MacroValidationResult,
+    validate_macro_event,
+    validate_macro_payload,
+)
+from bitcoin_data_platform.sources.sentiment_client import (
+    SentimentClient,
+    SentimentClientError,
+    SentimentHTTPError,
+)
+from bitcoin_data_platform.sources.sentiment_contract import (
+    SentimentContractViolationError,
+    SentimentRecord,
+    SentimentValidationResult,
+    validate_sentiment_payload,
+    validate_sentiment_record,
+)
 
 __all__ = [
     "DEFAULT_BASE_URL",
@@ -52,10 +76,26 @@ __all__ = [
     "CoinbaseHTTPError",
     "CoinbaseResponse",
     "ContractViolationError",
+    "MacroCalendarClient",
+    "MacroCalendarClientError",
+    "MacroContractViolationError",
+    "MacroEvent",
+    "MacroHTTPError",
+    "MacroValidationResult",
+    "SentimentClient",
+    "SentimentClientError",
+    "SentimentContractViolationError",
+    "SentimentHTTPError",
+    "SentimentRecord",
+    "SentimentValidationResult",
     "SourceUnavailableError",
     "ValidationResult",
     "validate_candle",
     "validate_candle_payload",
     "validate_coin_metrics_payload",
+    "validate_macro_event",
+    "validate_macro_payload",
     "validate_record",
+    "validate_sentiment_payload",
+    "validate_sentiment_record",
 ]
