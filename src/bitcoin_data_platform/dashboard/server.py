@@ -6,7 +6,11 @@ import io
 import json
 import logging
 import sys
+import threading
+import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -520,18 +524,18 @@ DEFAULT_KPI: dict[str, dict[str, Any]] = {
     "BTC": {
         "asset": "BTC",
         "name": "Bitcoin",
-        "spot_price": 87650.01,
+        "spot_price": 78191.00,
         "change_24h": 2.41,
-        "change_24h_usd": 2059.81,
-        "high_24h": 88120.00,
-        "low_24h": 85410.50,
+        "change_24h_usd": 1840.50,
+        "high_24h": 79200.00,
+        "low_24h": 77500.00,
         "volume_usd": 75.50,
         "volume_asset": 861.42,
         "tx_count": 345612,
         "active_addrs": 890140,
         "ath": 108900.00,
-        "ath_diff": -19.5,
-        "market_cap": 1.73,
+        "ath_diff": -28.2,
+        "market_cap": 1.54,
         "market_cap_unit": "Triliun",
         "dominance": 56.8,
         "supply": "19.78 Juta BTC",
@@ -541,18 +545,18 @@ DEFAULT_KPI: dict[str, dict[str, Any]] = {
     "ETH": {
         "asset": "ETH",
         "name": "Ethereum",
-        "spot_price": 2642.80,
+        "spot_price": 2514.00,
         "change_24h": 1.85,
-        "change_24h_usd": 48.10,
-        "high_24h": 2680.00,
-        "low_24h": 2580.40,
+        "change_24h_usd": 45.60,
+        "high_24h": 2560.00,
+        "low_24h": 2480.00,
         "volume_usd": 28.40,
         "volume_asset": 10745.50,
         "tx_count": 1120400,
         "active_addrs": 450200,
         "ath": 4891.70,
-        "ath_diff": -46.0,
-        "market_cap": 318.2,
+        "ath_diff": -48.6,
+        "market_cap": 302.8,
         "market_cap_unit": "Miliar",
         "dominance": 14.2,
         "supply": "120.40 Juta ETH",
@@ -1054,6 +1058,57 @@ def _format_short_date_id(d: datetime | date) -> str:
     return f"{d.day:02d} {month_str}"
 
 
+_PRICE_CACHE_TTL_SECONDS = 30.0
+_price_cache: dict[str, tuple[float, float]] = {}
+_price_cache_lock = threading.Lock()
+
+
+def _clear_price_cache() -> None:
+    """Clear internal price cache (useful for testing)."""
+    with _price_cache_lock:
+        _price_cache.clear()
+
+
+def _fetch_live_spot_price(asset: str) -> float | None:
+    """Fetch live spot price from Coinbase REST API with a 30s cache.
+
+    Calls GET https://api.coinbase.com/v2/prices/{asset}-USD/spot.
+    Returns float price on success, None on any error or timeout.
+    Results are cached for 30 seconds to prevent hammering the upstream API.
+    """
+    symbol = asset.upper().replace("-USD", "").strip()
+    now = time.monotonic()
+
+    with _price_cache_lock:
+        if symbol in _price_cache:
+            cached_price, cached_time = _price_cache[symbol]
+            if now - cached_time < _PRICE_CACHE_TTL_SECONDS:
+                return cached_price
+
+    url = f"https://api.coinbase.com/v2/prices/{symbol}-USD/spot"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "BitcoinDataPlatformDashboard/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            status = getattr(resp, "status", 200)
+            if status != 200:
+                return None
+            body = resp.read().decode("utf-8")
+            data = json.loads(body)
+            amount_val = data.get("data", {}).get("amount")
+            if amount_val is None:
+                return None
+            price = round(float(amount_val), 2)
+            with _price_cache_lock:
+                _price_cache[symbol] = (price, time.monotonic())
+            return price
+    except Exception as exc:
+        logger.debug("Failed to fetch live spot price for %s: %s", symbol, exc)
+        return None
+
+
 def _read_kpi_from_duckdb(db_path: Path, asset: str) -> dict[str, Any] | None:
     """Read latest KPI metrics from DuckDB if available."""
     if not db_path.is_file() or asset.upper() != "BTC":
@@ -1094,7 +1149,7 @@ def _read_kpi_from_duckdb(db_path: Path, asset: str) -> dict[str, Any] | None:
         latest = rows[0]
         prev = rows[1] if len(rows) > 1 else None
 
-        close_val = float(latest[4]) if latest[4] is not None else 87650.01
+        close_val = float(latest[4]) if latest[4] is not None else 78191.00
         open_val = float(latest[1]) if latest[1] is not None else close_val
         prev_close = float(prev[4]) if (prev and prev[4] is not None) else open_val
 
@@ -1372,15 +1427,21 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": f"Failed reading template: {exc}"}, status=500)
 
     def _handle_kpi(self, query: dict[str, list[str]]) -> None:
-        """Serve 3 KPI cards metrics."""
+        """Serve 3 KPI cards metrics with live spot price."""
         asset = query.get("asset", ["BTC"])[0].upper()
         if asset not in ("BTC", "ETH"):
             asset = "BTC"
 
         db_path = self.dashboard_server.db_path
-        data = _read_kpi_from_duckdb(db_path, asset)
-        if data is None:
-            data = DEFAULT_KPI.get(asset, DEFAULT_KPI["BTC"])
+        duckdb_data = _read_kpi_from_duckdb(db_path, asset)
+        if duckdb_data is not None:
+            data = duckdb_data.copy()
+        else:
+            data = DEFAULT_KPI.get(asset, DEFAULT_KPI["BTC"]).copy()
+
+        live_price = _fetch_live_spot_price(asset)
+        if live_price is not None:
+            data["spot_price"] = live_price
 
         self._send_json(data)
 

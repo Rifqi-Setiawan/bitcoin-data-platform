@@ -3,12 +3,13 @@
 import csv
 import json
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Generator
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import duckdb
 import pytest
@@ -16,6 +17,10 @@ import pytest
 from bitcoin_data_platform.cli import main
 from bitcoin_data_platform.dashboard.server import (
     DashboardServer,
+    _clear_price_cache,
+    _fetch_live_spot_price,
+    _price_cache,
+    _price_cache_lock,
     create_dashboard_server,
 )
 
@@ -169,31 +174,35 @@ def test_get_root_dashboard_html(test_server: tuple[DashboardServer, str]) -> No
 
 
 def test_get_kpi_metrics_schema_and_defaults(test_server: tuple[DashboardServer, str]) -> None:
-    """Test GET /api/kpi for BTC and ETH fallback metrics."""
+    """Test GET /api/kpi for BTC and ETH metrics and fallbacks."""
     _, base_url = test_server
 
-    # 1. Default BTC
-    status, headers, content = _http_get(f"{base_url}/api/kpi?asset=BTC")
-    assert status == 200
-    assert "application/json" in headers.get("content-type", "")
-    data = json.loads(content.decode("utf-8"))
-    assert data["asset"] == "BTC"
-    assert data["name"] == "Bitcoin"
-    assert isinstance(data["spot_price"], int | float)
-    assert isinstance(data["high_24h"], int | float)
-    assert isinstance(data["low_24h"], int | float)
-    assert isinstance(data["volume_usd"], int | float)
-    assert isinstance(data["volume_asset"], int | float)
-    assert isinstance(data["tx_count"], int)
-    assert isinstance(data["active_addrs"], int)
+    with patch(
+        "bitcoin_data_platform.dashboard.server._fetch_live_spot_price",
+        side_effect=lambda asset: 78191.0 if asset == "BTC" else 2514.0,
+    ):
+        # 1. BTC with live price
+        status, headers, content = _http_get(f"{base_url}/api/kpi?asset=BTC")
+        assert status == 200
+        assert "application/json" in headers.get("content-type", "")
+        data = json.loads(content.decode("utf-8"))
+        assert data["asset"] == "BTC"
+        assert data["name"] == "Bitcoin"
+        assert data["spot_price"] == 78191.0
+        assert isinstance(data["high_24h"], int | float)
+        assert isinstance(data["low_24h"], int | float)
+        assert isinstance(data["volume_usd"], int | float)
+        assert isinstance(data["volume_asset"], int | float)
+        assert isinstance(data["tx_count"], int)
+        assert isinstance(data["active_addrs"], int)
 
-    # 2. ETH
-    status, _, content = _http_get(f"{base_url}/api/kpi?asset=ETH")
-    assert status == 200
-    eth_data = json.loads(content.decode("utf-8"))
-    assert eth_data["asset"] == "ETH"
-    assert eth_data["name"] == "Ethereum"
-    assert eth_data["spot_price"] > 0
+        # 2. ETH with live price
+        status, _, content = _http_get(f"{base_url}/api/kpi?asset=ETH")
+        assert status == 200
+        eth_data = json.loads(content.decode("utf-8"))
+        assert eth_data["asset"] == "ETH"
+        assert eth_data["name"] == "Ethereum"
+        assert eth_data["spot_price"] == 2514.0
 
 
 def test_get_chart_series(test_server: tuple[DashboardServer, str]) -> None:
@@ -318,16 +327,34 @@ def test_duckdb_integration_querying(populated_duckdb: Path) -> None:
     thread.start()
 
     try:
-        # Test KPI from DuckDB
-        status, _, content = _http_get(f"{base_url}/api/kpi?asset=BTC")
-        assert status == 200
-        kpi = json.loads(content.decode("utf-8"))
-        assert kpi["spot_price"] == 88500.0
-        assert kpi["high_24h"] == 89000.0
-        assert kpi["low_24h"] == 85000.0
-        assert kpi["volume_asset"] == 950.0
-        assert kpi["tx_count"] == 360000
-        assert kpi["active_addrs"] == 910000
+        # Test KPI fallback to DuckDB when live API is unavailable
+        with patch(
+            "bitcoin_data_platform.dashboard.server._fetch_live_spot_price", return_value=None
+        ):
+            status, _, content = _http_get(f"{base_url}/api/kpi?asset=BTC")
+            assert status == 200
+            kpi = json.loads(content.decode("utf-8"))
+            assert kpi["spot_price"] == 88500.0
+            assert kpi["high_24h"] == 89000.0
+            assert kpi["low_24h"] == 85000.0
+            assert kpi["volume_asset"] == 950.0
+            assert kpi["tx_count"] == 360000
+            assert kpi["active_addrs"] == 910000
+
+        # Test KPI with live price active: spot_price is live, historical metrics come from DuckDB
+        with patch(
+            "bitcoin_data_platform.dashboard.server._fetch_live_spot_price",
+            return_value=95000.50,
+        ):
+            status, _, content = _http_get(f"{base_url}/api/kpi?asset=BTC")
+            assert status == 200
+            kpi = json.loads(content.decode("utf-8"))
+            assert kpi["spot_price"] == 95000.50
+            assert kpi["high_24h"] == 89000.0
+            assert kpi["low_24h"] == 85000.0
+            assert kpi["volume_asset"] == 950.0
+            assert kpi["tx_count"] == 360000
+            assert kpi["active_addrs"] == 910000
 
         # Test Ledger from DuckDB
         status, _, content = _http_get(f"{base_url}/api/ledger?asset=BTC&limit=10")
@@ -416,10 +443,14 @@ def test_dashboard_invalid_params_fallback(test_server: tuple[DashboardServer, s
     _, base_url = test_server
 
     # Unknown asset defaults to BTC
-    status, _, content = _http_get(f"{base_url}/api/kpi?asset=XYZ")
-    assert status == 200
-    data = json.loads(content.decode("utf-8"))
-    assert data["asset"] == "BTC"
+    with patch(
+        "bitcoin_data_platform.dashboard.server._fetch_live_spot_price",
+        return_value=78191.0,
+    ):
+        status, _, content = _http_get(f"{base_url}/api/kpi?asset=XYZ")
+        assert status == 200
+        data = json.loads(content.decode("utf-8"))
+        assert data["asset"] == "BTC"
 
     # Invalid range defaults to 30D
     status, _, content = _http_get(f"{base_url}/api/chart?asset=BTC&range=999D")
@@ -454,3 +485,180 @@ def test_dashboard_missing_template_asset(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2.0)
+
+
+def _mock_coinbase_response(amount: str, base: str = "BTC") -> MagicMock:
+    """Helper to mock a successful Coinbase spot price HTTP response."""
+    payload = json.dumps(
+        {
+            "data": {
+                "amount": amount,
+                "base": base,
+                "currency": "USD",
+            }
+        }
+    ).encode("utf-8")
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.read.return_value = payload
+    mock_resp.__enter__.return_value = mock_resp
+    return mock_resp
+
+
+def test_fetch_live_spot_price_btc_success() -> None:
+    """Test successful live spot price fetch for BTC from Coinbase API."""
+    _clear_price_cache()
+    mock_resp = _mock_coinbase_response("78191.095", base="BTC")
+    with patch(
+        "bitcoin_data_platform.dashboard.server.urllib.request.urlopen",
+        return_value=mock_resp,
+    ) as mock_open:
+        price = _fetch_live_spot_price("BTC")
+        assert price == 78191.10
+        assert mock_open.call_count == 1
+
+        call_args, call_kwargs = mock_open.call_args
+        req = call_args[0]
+        assert isinstance(req, urllib.request.Request)
+        assert req.full_url == "https://api.coinbase.com/v2/prices/BTC-USD/spot"
+        assert req.headers.get("User-agent") == "BitcoinDataPlatformDashboard/1.0"
+        assert call_kwargs.get("timeout") == 3.0
+
+
+def test_fetch_live_spot_price_eth_success() -> None:
+    """Test successful live spot price fetch for ETH from Coinbase API."""
+    _clear_price_cache()
+    mock_resp = _mock_coinbase_response("2514.675", base="ETH")
+    with patch(
+        "bitcoin_data_platform.dashboard.server.urllib.request.urlopen",
+        return_value=mock_resp,
+    ) as mock_open:
+        price = _fetch_live_spot_price("ETH")
+        assert price == 2514.68
+        assert mock_open.call_count == 1
+
+        req = mock_open.call_args[0][0]
+        assert req.full_url == "https://api.coinbase.com/v2/prices/ETH-USD/spot"
+
+
+def test_fetch_live_spot_price_caching() -> None:
+    """Test price caching behavior: subsequent calls within 30s reuse cached price."""
+    _clear_price_cache()
+    mock_resp = _mock_coinbase_response("78191.00", base="BTC")
+    with patch(
+        "bitcoin_data_platform.dashboard.server.urllib.request.urlopen",
+        return_value=mock_resp,
+    ) as mock_open:
+        p1 = _fetch_live_spot_price("BTC")
+        assert p1 == 78191.00
+        assert mock_open.call_count == 1
+
+        p2 = _fetch_live_spot_price("BTC")
+        assert p2 == 78191.00
+        assert mock_open.call_count == 1
+
+
+def test_fetch_live_spot_price_cache_expiry() -> None:
+    """Test cache expires after 30 seconds and triggers a new API request."""
+    _clear_price_cache()
+    mock_resp1 = _mock_coinbase_response("78191.00", base="BTC")
+    mock_resp2 = _mock_coinbase_response("78250.50", base="BTC")
+    with patch(
+        "bitcoin_data_platform.dashboard.server.urllib.request.urlopen",
+        side_effect=[mock_resp1, mock_resp2],
+    ) as mock_open:
+        p1 = _fetch_live_spot_price("BTC")
+        assert p1 == 78191.00
+        assert mock_open.call_count == 1
+
+        with _price_cache_lock:
+            _price_cache["BTC"] = (78191.00, time.monotonic() - 31.0)
+
+        p2 = _fetch_live_spot_price("BTC")
+        assert p2 == 78250.50
+        assert mock_open.call_count == 2
+
+
+def test_fetch_live_spot_price_network_error_fallback() -> None:
+    """Test graceful fallback returning None when URLError occurs."""
+    _clear_price_cache()
+    with patch(
+        "bitcoin_data_platform.dashboard.server.urllib.request.urlopen",
+        side_effect=urllib.error.URLError("Network unreachable"),
+    ):
+        price = _fetch_live_spot_price("BTC")
+        assert price is None
+
+
+def test_fetch_live_spot_price_http_error_fallback() -> None:
+    """Test graceful fallback returning None when HTTPError occurs."""
+    _clear_price_cache()
+    err = urllib.error.HTTPError(
+        url="https://api.coinbase.com/v2/prices/BTC-USD/spot",
+        code=503,
+        msg="Service Unavailable",
+        hdrs=None,  # type: ignore[arg-type]
+        fp=None,
+    )
+    with patch(
+        "bitcoin_data_platform.dashboard.server.urllib.request.urlopen",
+        side_effect=err,
+    ):
+        price = _fetch_live_spot_price("BTC")
+        assert price is None
+
+
+def test_fetch_live_spot_price_timeout_fallback() -> None:
+    """Test graceful fallback returning None when connection times out."""
+    _clear_price_cache()
+    with patch(
+        "bitcoin_data_platform.dashboard.server.urllib.request.urlopen",
+        side_effect=TimeoutError("Request timed out"),
+    ):
+        price = _fetch_live_spot_price("BTC")
+        assert price is None
+
+
+def test_fetch_live_spot_price_malformed_json_fallback() -> None:
+    """Test graceful fallback returning None on invalid JSON response."""
+    _clear_price_cache()
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.read.return_value = b"<!DOCTYPE html><html>Service Unavailable</html>"
+    mock_resp.__enter__.return_value = mock_resp
+    with patch(
+        "bitcoin_data_platform.dashboard.server.urllib.request.urlopen",
+        return_value=mock_resp,
+    ):
+        price = _fetch_live_spot_price("BTC")
+        assert price is None
+
+
+def test_fetch_live_spot_price_missing_amount_fallback() -> None:
+    """Test graceful fallback returning None when amount key is absent."""
+    _clear_price_cache()
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.read.return_value = b'{"data": {"base": "BTC", "currency": "USD"}}'
+    mock_resp.__enter__.return_value = mock_resp
+    with patch(
+        "bitcoin_data_platform.dashboard.server.urllib.request.urlopen",
+        return_value=mock_resp,
+    ):
+        price = _fetch_live_spot_price("BTC")
+        assert price is None
+
+
+def test_fetch_live_spot_price_non_200_status() -> None:
+    """Test response with non-200 status code returns None."""
+    _clear_price_cache()
+    mock_resp = MagicMock()
+    mock_resp.status = 502
+    mock_resp.read.return_value = b'{"error": "bad gateway"}'
+    mock_resp.__enter__.return_value = mock_resp
+    with patch(
+        "bitcoin_data_platform.dashboard.server.urllib.request.urlopen",
+        return_value=mock_resp,
+    ):
+        price = _fetch_live_spot_price("BTC")
+        assert price is None
