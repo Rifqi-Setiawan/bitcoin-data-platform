@@ -2117,8 +2117,8 @@ def main(
 
         # Ensure view exists if writable
         try:
-            db_manager = DuckDBManager(db_path=db_path)
-            db_manager.create_investment_signals_view()
+            with DuckDBManager(db_path=db_path) as db_manager:
+                db_manager.create_investment_signals_view()
         except Exception:
             pass  # Read-only or table already exists
 

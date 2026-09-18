@@ -4,6 +4,9 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import duckdb
+import pytest
+
 from bitcoin_data_platform.backtest.models import (
     BacktestConfig,
     BacktestDayRecord,
@@ -222,3 +225,59 @@ class TestBacktestCLIExecution:
             backtest_engine=mock_engine,
         )
         assert exit_code == 2
+
+    def test_backtest_cli_unmocked_duckdb_end_to_end(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """End-to-end unmocked CLI execution against real DuckDB database."""
+        db_file = tmp_path / "test_e2e.duckdb"
+        con = duckdb.connect(str(db_file))
+        con.execute(
+            """
+            CREATE TABLE mart_btc_investment_signals_daily (
+                trade_date_utc DATE PRIMARY KEY,
+                market_close_usd DOUBLE,
+                sma_200 DOUBLE,
+                mayer_multiple DOUBLE,
+                mvrv_ratio DOUBLE,
+                fng_value INTEGER,
+                fng_classification VARCHAR,
+                has_high_impact_macro_event BOOLEAN,
+                investment_signal VARCHAR
+            );
+            INSERT INTO mart_btc_investment_signals_daily VALUES
+            ('2025-01-01', 50000.0, 48000.0, 1.04, 1.5, 50, 'Neutral', FALSE, 'STANDARD_DCA'),
+            (
+                '2025-01-02',
+                51000.0,
+                48100.0,
+                1.06,
+                1.55,
+                55,
+                'Neutral',
+                TRUE,
+                'DEFENSIVE_RESERVE',
+            ),
+            (
+                '2025-01-03',
+                52000.0,
+                48200.0,
+                1.08,
+                1.6,
+                60,
+                'Greed',
+                FALSE,
+                'OPPORTUNISTIC_ACCUMULATE',
+            );
+            """
+        )
+        con.close()
+
+        exit_code = main(["backtest", "--db-path", str(db_file)])
+        assert exit_code == 0
+
+        captured = capsys.readouterr()
+        assert "BITCOIN STRATEGY BENCHMARK REPORT" in captured.out
+        assert "Lump Sum Buy & Hold" in captured.out
+        assert "Blind DCA" in captured.out
+        assert "Dynamic Reserve DCA" in captured.out
