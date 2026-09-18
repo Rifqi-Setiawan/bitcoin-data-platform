@@ -5,6 +5,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC
+from decimal import Decimal
 from pathlib import Path
 
 import pyarrow as pa
@@ -24,6 +25,7 @@ NETWORK_PARQUET_SCHEMA = pa.schema(
         ("metric_date_utc", pa.timestamp("us", tz="UTC")),
         ("transaction_count", pa.int64()),
         ("active_addresses_count", pa.int64()),
+        ("mvrv_ratio", pa.float64()),
         ("ingested_at_utc", pa.timestamp("us", tz="UTC")),
         ("source_run_id", pa.string()),
     ]
@@ -58,6 +60,9 @@ def read_network_partition_metrics(file_path: Path) -> list[NormalizedNetworkMet
                 else ingested.astimezone(UTC)
             )
 
+            mvrv_raw = row.get("mvrv_ratio")
+            mvrv_dec = Decimal(str(mvrv_raw)) if mvrv_raw is not None else None
+
             metrics.append(
                 NormalizedNetworkMetric(
                     source=str(row["source"]),
@@ -67,6 +72,7 @@ def read_network_partition_metrics(file_path: Path) -> list[NormalizedNetworkMet
                     active_addresses_count=int(row["active_addresses_count"]),
                     ingested_at_utc=ingested,
                     source_run_id=str(row["source_run_id"]),
+                    mvrv_ratio=mvrv_dec,
                 )
             )
         return metrics
@@ -84,6 +90,10 @@ def network_metrics_to_table(metrics: list[NormalizedNetworkMetric]) -> pa.Table
         pa.array([m.metric_date_utc for m in metrics], type=pa.timestamp("us", tz="UTC")),
         pa.array([m.transaction_count for m in metrics], type=pa.int64()),
         pa.array([m.active_addresses_count for m in metrics], type=pa.int64()),
+        pa.array(
+            [float(m.mvrv_ratio) if m.mvrv_ratio is not None else None for m in metrics],
+            type=pa.float64(),
+        ),
         pa.array([m.ingested_at_utc for m in metrics], type=pa.timestamp("us", tz="UTC")),
         pa.array([m.source_run_id for m in metrics], type=pa.string()),
     ]

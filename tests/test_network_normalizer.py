@@ -192,3 +192,32 @@ def test_write_and_read_network_raw_envelope(tmp_path: Path) -> None:
     assert env.asset == "btc"
     assert env.record_count == 2
     assert env.http_status == 200
+
+
+def test_normalized_network_metric_includes_mvrv() -> None:
+    """15. NormalizedNetworkMetric includes mvrv_ratio from CoinMetricsRecord and raw dict."""
+    from decimal import Decimal
+
+    ingested = datetime(2026, 9, 18, 0, 0, tzinfo=UTC)
+
+    # From raw dict
+    raw = {
+        "asset": "btc",
+        "time": "2026-09-17T00:00:00.000000000Z",
+        "TxCnt": "345612",
+        "AdrActCnt": "890140",
+        "CapMVRVCur": "1.435849",
+    }
+    m1 = normalize_network_record(raw, ingested_at_utc=ingested, source_run_id="run-1")
+    assert m1.mvrv_ratio == Decimal("1.435849")
+
+    # From CoinMetricsRecord
+    rec = CoinMetricsRecord(
+        asset="btc",
+        time_utc=datetime(2026, 9, 17, 0, 0, tzinfo=UTC),
+        tx_count=345612,
+        active_addresses=890140,
+        mvrv_ratio=Decimal("2.105"),
+    )
+    m2 = normalize_network_record(rec, ingested_at_utc=ingested, source_run_id="run-2")
+    assert m2.mvrv_ratio == Decimal("2.105")

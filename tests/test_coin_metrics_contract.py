@@ -174,3 +174,35 @@ def test_null_missing_counts() -> None:
     assert record is None
     assert any("TxCnt must not be null or missing" in v for v in violations)
     assert any("AdrActCnt must not be null or missing" in v for v in violations)
+
+
+def test_coin_metrics_record_includes_mvrv() -> None:
+    """14. CoinMetricsRecord parses CapMVRVCur as Decimal when present and None when absent."""
+    from decimal import Decimal
+
+    # Case 1: CapMVRVCur present
+    record, violations = validate_record(
+        {
+            "asset": "btc",
+            "time": "2026-09-17T00:00:00.000000000Z",
+            "TxCnt": "345612",
+            "AdrActCnt": "890140",
+            "CapMVRVCur": "1.435849433216295172",
+        }
+    )
+    assert len(violations) == 0
+    assert record is not None
+    assert record.mvrv_ratio == Decimal("1.435849433216295172")
+
+    # Case 2: CapMVRVCur absent (historical backward compatibility)
+    record_old, violations_old = validate_record(
+        {
+            "asset": "btc",
+            "time": "2026-09-17T00:00:00.000000000Z",
+            "TxCnt": "345612",
+            "AdrActCnt": "890140",
+        }
+    )
+    assert len(violations_old) == 0
+    assert record_old is not None
+    assert record_old.mvrv_ratio is None

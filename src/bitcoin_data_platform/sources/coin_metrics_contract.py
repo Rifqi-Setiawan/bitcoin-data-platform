@@ -3,6 +3,7 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, time
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from bitcoin_data_platform.time_range import parse_iso_utc
@@ -21,12 +22,14 @@ class CoinMetricsRecord:
     - time_utc: UTC datetime aligned to daily boundary (00:00:00 UTC).
     - tx_count: Total daily transaction count (TxCnt), non-negative integer >= 0.
     - active_addresses: Daily active address count (AdrActCnt), non-negative integer >= 0.
+    - mvrv_ratio: MVRV ratio (CapMVRVCur), optional non-negative Decimal.
     """
 
     asset: str
     time_utc: datetime
     tx_count: int
     active_addresses: int
+    mvrv_ratio: Decimal | None = None
 
     @property
     def metric_date_utc(self) -> datetime:
@@ -96,6 +99,25 @@ def _parse_non_negative_int(
     return int_val, None
 
 
+def _parse_optional_decimal(
+    val: Any, field_name: str, prefix: str
+) -> tuple[Decimal | None, str | None]:
+    """Parse an optional decimal value."""
+    if val is None or (isinstance(val, str) and not val.strip()):
+        return None, None
+    if isinstance(val, bool):
+        return None, f"{prefix}{field_name} must be a numeric decimal, got boolean {val}"
+    try:
+        dec_val = Decimal(str(val).strip())
+    except (InvalidOperation, ValueError, TypeError):
+        return None, f"{prefix}{field_name} must be a valid decimal, got {val!r}"
+
+    if dec_val < 0:
+        return None, f"{prefix}{field_name} must be non-negative (>= 0), got {dec_val}"
+
+    return dec_val, None
+
+
 def validate_record(
     raw_record: Any, index: int | None = None
 ) -> tuple[CoinMetricsRecord | None, list[str]]:
@@ -130,6 +152,12 @@ def validate_record(
         elif val is not None:
             int_fields[metric_name] = val
 
+    mvrv_ratio, mvrv_err = _parse_optional_decimal(
+        raw_record.get("CapMVRVCur"), "CapMVRVCur", prefix
+    )
+    if mvrv_err:
+        violations.append(mvrv_err)
+
     if violations or dt is None or len(int_fields) != 2 or not asset_str:
         return None, violations
 
@@ -138,6 +166,7 @@ def validate_record(
         time_utc=dt,
         tx_count=int_fields["TxCnt"],
         active_addresses=int_fields["AdrActCnt"],
+        mvrv_ratio=mvrv_ratio,
     )
     return record, []
 

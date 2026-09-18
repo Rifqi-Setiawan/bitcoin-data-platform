@@ -23,7 +23,10 @@ The platform employs a two-tier storage and modeling architecture:
 3. [mart_btc_usd_daily](#3-mart_btc_usd_daily)
 4. [fact_network_metrics_daily](#4-fact_network_metrics_daily)
 5. [mart_btc_market_and_network_daily](#5-mart_btc_market_and_network_daily)
-6. [Type System & Serialization Conventions](#6-type-system--serialization-conventions)
+6. [raw_crypto_sentiment_daily](#6-raw_crypto_sentiment_daily)
+7. [raw_macro_economic_events](#7-raw_macro_economic_events)
+8. [mart_btc_investment_signals_daily](#8-mart_btc_investment_signals_daily)
+9. [Type System & Serialization Conventions](#9-type-system--serialization-conventions)
 
 ---
 
@@ -35,6 +38,9 @@ The platform employs a two-tier storage and modeling architecture:
 | `mart_btc_usd_daily` | Analytical Mart | 1 UTC day per source + product | `(source, product_id, trade_date_utc)` | DuckDB SQL View |
 | `fact_network_metrics_daily` | Curated Fact | 1 UTC day per source + asset | `(source, asset, metric_date_utc)` | Hive Parquet (`curated/onchain/network_metrics_daily/`) |
 | `mart_btc_market_and_network_daily` | Conformed Mart | 1 UTC day per asset | `(asset, trade_date_utc)` | DuckDB SQL View (FULL OUTER JOIN) |
+| `raw_crypto_sentiment_daily` | Ingestion Table | 1 UTC day | `sentiment_date_utc` | DuckDB Table |
+| `raw_macro_economic_events` | Ingestion Table | 1 scheduled event | `event_id` | DuckDB Table |
+| `mart_btc_investment_signals_daily` | Analytical Mart | 1 UTC day | `trade_date_utc` | DuckDB SQL View |
 
 ---
 
@@ -114,6 +120,7 @@ Normalized daily on-chain network activity observations for Bitcoin, tracking tr
 | `metric_date_utc` | `TIMESTAMPTZ` | No | Midnight UTC timestamp of the observation day. |
 | `transaction_count` | `BIGINT` | No | Number of confirmed on-chain transactions on the Bitcoin ledger (`TxCnt`). Must be >= 0. |
 | `active_addresses_count` | `BIGINT` | No | Count of unique active on-chain addresses participating as senders or receivers (`AdrActCnt`). Must be >= 0. |
+| `mvrv_ratio` | `DOUBLE` | Yes | Daily Market Value to Realized Value ratio (`CapMVRVCur`) from Coin Metrics. Null for historical records prior to MVRV tracking. |
 | `ingested_at_utc` | `TIMESTAMPTZ` | No | UTC timestamp when the metric payload was retrieved from provider. |
 | `source_run_id` | `VARCHAR` | No | Unique UUID of the fetch-network pipeline run. |
 | `year` | `INTEGER` | No | Partition year extracted from `metric_date_utc`. Partition key. |
@@ -149,7 +156,79 @@ Conformed cross-domain analytical mart bridging off-chain trading dynamics and o
 
 ---
 
-## 6. Type System & Serialization Conventions
+## 6. raw_crypto_sentiment_daily
+
+### Description
+Daily Crypto Fear & Greed Index ingested from Alternative.me, measuring market sentiment from extreme fear to extreme greed.
+
+- **Layer**: Raw Ingestion Layer (Sentiment Domain)
+- **Implementation**: DuckDB Table
+- **Primary Key**: `sentiment_date_utc`
+- **Grain**: 1 row per UTC calendar day
+
+### Schema
+
+| Column Name | Data Type | Nullable | Description & Business Rules |
+| :--- | :--- | :--- | :--- |
+| `sentiment_date_utc` | `DATE` | No | Calendar date of sentiment reading in UTC. Primary Key. |
+| `fng_value` | `INTEGER` | No | Sentiment index score from 0 (Extreme Fear) to 100 (Extreme Greed). |
+| `fng_classification` | `VARCHAR` | No | Sentiment category: `Extreme Fear`, `Fear`, `Neutral`, `Greed`, `Extreme Greed`. |
+| `ingested_at_utc` | `TIMESTAMPTZ` | No | UTC timestamp when the sentiment record was ingested. |
+
+---
+
+## 7. raw_macro_economic_events
+
+### Description
+Scheduled macroeconomic calendar events ingested from ForexFactory, focusing on high-impact US economic indicators (FOMC, CPI, Non-Farm Payrolls).
+
+- **Layer**: Raw Ingestion Layer (Macroeconomic Domain)
+- **Implementation**: DuckDB Table
+- **Primary Key**: `event_id`
+- **Grain**: 1 row per scheduled event
+
+### Schema
+
+| Column Name | Data Type | Nullable | Description & Business Rules |
+| :--- | :--- | :--- | :--- |
+| `event_id` | `VARCHAR` | No | Deterministic SHA-256 hash of `(title, scheduled_utc)`. Primary Key. |
+| `country` | `VARCHAR` | No | Currency/country code (`USD`). |
+| `title` | `VARCHAR` | No | Event release title (e.g. `FOMC Statement`, `CPI m/m`). |
+| `impact` | `VARCHAR` | No | Forecasted market impact level (`High`, `Medium`, `Low`, `Holiday`). |
+| `scheduled_utc` | `TIMESTAMPTZ` | No | Scheduled event release timestamp in UTC. |
+| `forecast` | `VARCHAR` | Yes | Market consensus forecast value. Null if unforecasted. |
+| `previous` | `VARCHAR` | Yes | Prior period reported metric value. Null if absent. |
+| `ingested_at_utc` | `TIMESTAMPTZ` | No | UTC timestamp when the event was ingested. |
+
+---
+
+## 8. mart_btc_investment_signals_daily
+
+### Description
+Multi-domain conformed analytical mart joining daily market prices, 200-day rolling moving averages, Mayer Multiple, on-chain MVRV ratio, market sentiment, and macroeconomic event awareness into deterministic investment allocation signals.
+
+- **Layer**: Conformed Analytical Mart Layer (Investment Strategy Serving)
+- **Implementation**: DuckDB SQL View
+- **Natural Key**: `trade_date_utc`
+- **Grain**: 1 row per UTC calendar day
+
+### Schema
+
+| Column Name | Data Type | Nullable | Description & Business Rules |
+| :--- | :--- | :--- | :--- |
+| `trade_date_utc` | `TIMESTAMPTZ` | No | Midnight boundary of observation day in UTC. |
+| `market_close_usd` | `DECIMAL(38,18)` | Yes | Closing trade execution price in USD for the day. |
+| `sma_200` | `DOUBLE` | Yes | 200-day simple moving average of daily close prices (`AVG(close) OVER (...)`). |
+| `mayer_multiple` | `DOUBLE` | Yes | Mayer Multiple: `market_close_usd / sma_200`. Ratio of current price to 200-day SMA. |
+| `mvrv_ratio` | `DOUBLE` | Yes | Market Value to Realized Value ratio from on-chain metrics. Null if unobserved. |
+| `fng_value` | `INTEGER` | No | Fear & Greed Index score (0–100). Defaults to 50 if sentiment unobserved. |
+| `fng_classification` | `VARCHAR` | No | Fear & Greed label. Defaults to `Neutral` if sentiment unobserved. |
+| `has_high_impact_macro_event` | `BOOLEAN` | No | `TRUE` if at least one High-impact USD macro event was scheduled on this date; else `FALSE`. |
+| `investment_signal` | `VARCHAR` | No | Rule-based tactical asset allocation signal: `AGGRESSIVE_ACCUMULATE`, `OPPORTUNISTIC_ACCUMULATE`, `STANDARD_DCA`, `DEFENSIVE_RESERVE`, or `HARD_FREEZE`. |
+
+---
+
+## 9. Type System & Serialization Conventions
 
 - **Monetary & Volume Precision**: All monetary prices and asset volumes are maintained as fixed-point `DECIMAL(38,18)` in Parquet and DuckDB to eliminate binary floating-point roundoff errors.
 - **Timezone Invariant**: All timestamps are strictly UTC with explicit timezone offset (`TIMESTAMPTZ` / `pyarrow.timestamp("us", tz="UTC")`). Naive datetimes are forbidden.

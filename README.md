@@ -552,6 +552,25 @@ bitcoin-data diagnose --dry-run
 bitcoin-data diagnose --auto-heal
 ```
 
+### Investment Data Expansion (Phase 12)
+
+Phase 12 expands the data platform with on-chain valuation, market sentiment, and macroeconomic calendar data required for evidence-based investment signals:
+1. **Coin Metrics MVRV Extension**: Ingests `CapMVRVCur` (Market Value to Realized Value) into curated Parquet partitions and `fact_network_metrics_daily`.
+2. **Crypto Fear & Greed Index (`fetch-sentiment`)**: Daily sentiment tracking (0–100) from Alternative.me persisted to `raw_crypto_sentiment_daily`.
+3. **ForexFactory Macro Calendar (`fetch-macro-calendar`)**: Scheduled high-impact US economic events (FOMC, CPI, NFP) persisted to `raw_macro_economic_events`.
+4. **Investment Signals Mart (`mart_btc_investment_signals_daily`)**: Conformed view joining market OHLCV, 200-day rolling SMA, Mayer Multiple, MVRV ratio, sentiment, and macro event flags into deterministic allocation signals (`AGGRESSIVE_ACCUMULATE`, `OPPORTUNISTIC_ACCUMULATE`, `STANDARD_DCA`, `DEFENSIVE_RESERVE`, `HARD_FREEZE`).
+
+```bash
+# 1. Fetch current Crypto Fear & Greed Index
+bitcoin-data fetch-sentiment --limit 1
+
+# 2. Fetch last 7 days of sentiment history
+bitcoin-data fetch-sentiment --limit 7
+
+# 3. Fetch this week's scheduled USD High-impact economic calendar events
+bitcoin-data fetch-macro-calendar
+```
+
 ### Web UI Dashboard & API Server
 
 The platform includes a zero-dependency, lightweight web dashboard ("Bitcoin Market Hub") served using Python's standard library `ThreadingHTTPServer` (`src/bitcoin_data_platform/dashboard/`).
@@ -615,6 +634,7 @@ make clean-dist # remove build and packaging artifacts
 - [Phase 9 Specification](docs/specs/PHASE_9_WEBSOCKET_STREAMING.md)
 - [Phase 10 Specification](docs/specs/PHASE_10_LAKEHOUSE_EVOLUTION.md)
 - [Phase 11 Specification](docs/specs/PHASE_11_OPERATIONAL_DIAGNOSTICS.md)
+- [Phase 12 Specification](docs/specs/PHASE_12_INVESTMENT_DATA_EXPANSION.md)
 - [Official Data Dictionary](docs/data_dictionary/DATA_DICTIONARY.md)
 - [ADR D-008: Container Evaluation](docs/decisions/D-008_CONTAINER_EVALUATION.md)
 - [ADR D-009: dbt-core Evaluation](docs/decisions/D-009_DBT_EVALUATION.md)

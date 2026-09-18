@@ -43,6 +43,20 @@ from bitcoin_data_platform.sources.coinbase_client import (
     SourceUnavailableError,
 )
 from bitcoin_data_platform.sources.coinbase_contract import validate_candle_payload
+from bitcoin_data_platform.sources.macro_calendar_client import (
+    MacroCalendarClient,
+)
+from bitcoin_data_platform.sources.macro_calendar_client import (
+    SourceUnavailableError as MacroSourceUnavailableError,
+)
+from bitcoin_data_platform.sources.macro_calendar_contract import MacroContractViolationError
+from bitcoin_data_platform.sources.sentiment_client import (
+    SentimentClient,
+)
+from bitcoin_data_platform.sources.sentiment_client import (
+    SourceUnavailableError as SentimentSourceUnavailableError,
+)
+from bitcoin_data_platform.sources.sentiment_contract import SentimentContractViolationError
 from bitcoin_data_platform.storage.duckdb_manager import DuckDBManager, DuckDBManagerError
 from bitcoin_data_platform.storage.network_parquet_writer import (
     NetworkParquetStorageError,
@@ -800,6 +814,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to DuckDB database file (default: ./data/state/platform.duckdb).",
     )
 
+    # 15. fetch-sentiment command
+    fetch_sentiment_parser = subparsers.add_parser(
+        "fetch-sentiment",
+        parents=[base_db_parser],
+        help="Fetch Crypto Fear & Greed Index and persist to DuckDB.",
+        description=(
+            "Fetch daily Crypto Fear & Greed Index from Alternative.me "
+            "and persist to DuckDB raw_crypto_sentiment_daily table."
+        ),
+    )
+    fetch_sentiment_parser.add_argument(
+        "--limit",
+        type=int,
+        default=1,
+        help="Number of daily sentiment records to fetch (1..30, default: 1).",
+    )
+
+    # 16. fetch-macro-calendar command
+    subparsers.add_parser(
+        "fetch-macro-calendar",
+        parents=[base_db_parser],
+        help="Fetch high-impact macroeconomic events and persist to DuckDB.",
+        description=(
+            "Fetch scheduled high-impact macroeconomic events from ForexFactory "
+            "and persist to DuckDB raw_macro_economic_events table."
+        ),
+    )
+
     return parser
 
 
@@ -810,6 +852,8 @@ def main(
     client: CoinbaseClient | None = None,
     network_client: CoinMetricsClient | None = None,
     connect_factory: Any = None,
+    sentiment_client: SentimentClient | None = None,
+    macro_client: MacroCalendarClient | None = None,
 ) -> int:
     parser = build_parser()
     if argv is None:
@@ -1410,6 +1454,7 @@ def main(
 
             db_manager.create_network_fact_view()
             db_manager.create_cross_domain_mart_view()
+            db_manager.create_investment_signals_view()
 
             max_date = max((m.metric_date_utc for m in net_metrics), default=None)
             old_wm = db_manager.get_watermark(pipeline_id="coin_metrics_daily")
@@ -1564,6 +1609,89 @@ def main(
         except Exception as exc:
             sys.stderr.write(f"error: dashboard server failed: {exc}\n")
             return 1
+
+    if args.command == "fetch-sentiment":
+        if args.limit < 1 or args.limit > 30:
+            sys.stderr.write("error: --limit must be between 1 and 30\n")
+            return 2
+
+        db_path = Path(args.db_path)
+        curated_dir = db_path.parent.parent / "curated"
+        db_manager = DuckDBManager(db_path=db_path, curated_dir=curated_dir)
+        db_manager.create_sentiment_table()
+
+        fng_client = sentiment_client if sentiment_client is not None else SentimentClient()
+        try:
+            if args.limit == 1:
+                records = [fng_client.fetch_current()]
+            else:
+                records = fng_client.fetch_history(limit=args.limit)
+        except SentimentSourceUnavailableError as exc:
+            sys.stderr.write(f"error: sentiment source unavailable: {exc}\n")
+            return 3
+        except SentimentContractViolationError as exc:
+            sys.stderr.write(f"error: sentiment contract violation: {exc}\n")
+            return 4
+        except Exception as exc:
+            sys.stderr.write(f"error: failed to fetch sentiment: {exc}\n")
+            return 1
+
+        try:
+            inserted = db_manager.insert_sentiment_records(records)
+            db_manager.create_investment_signals_view()
+        except DuckDBManagerError as exc:
+            sys.stderr.write(f"error: database storage failure: {exc}\n")
+            return 5
+        except Exception as exc:
+            sys.stderr.write(f"error: failed persisting sentiment: {exc}\n")
+            return 5
+
+        sentiment_summary: dict[str, Any] = {
+            "status": "success",
+            "records_fetched": len(records),
+            "records_inserted": inserted,
+            "db_path": str(db_path),
+        }
+        sys.stdout.write(json.dumps(sentiment_summary, indent=2) + "\n")
+        return 0
+
+    if args.command == "fetch-macro-calendar":
+        db_path = Path(args.db_path)
+        curated_dir = db_path.parent.parent / "curated"
+        db_manager = DuckDBManager(db_path=db_path, curated_dir=curated_dir)
+        db_manager.create_macro_events_table()
+
+        cal_client = macro_client if macro_client is not None else MacroCalendarClient()
+        try:
+            events = cal_client.fetch_week_events(country_filter="USD", impact_filter="High")
+        except MacroSourceUnavailableError as exc:
+            sys.stderr.write(f"error: macro calendar source unavailable: {exc}\n")
+            return 3
+        except MacroContractViolationError as exc:
+            sys.stderr.write(f"error: macro calendar contract violation: {exc}\n")
+            return 4
+        except Exception as exc:
+            sys.stderr.write(f"error: failed to fetch macro calendar: {exc}\n")
+            return 1
+
+        try:
+            inserted = db_manager.insert_macro_events(events)
+            db_manager.create_investment_signals_view()
+        except DuckDBManagerError as exc:
+            sys.stderr.write(f"error: database storage failure: {exc}\n")
+            return 5
+        except Exception as exc:
+            sys.stderr.write(f"error: failed persisting macro events: {exc}\n")
+            return 5
+
+        macro_summary: dict[str, Any] = {
+            "status": "success",
+            "events_fetched": len(events),
+            "events_inserted": inserted,
+            "db_path": str(db_path),
+        }
+        sys.stdout.write(json.dumps(macro_summary, indent=2) + "\n")
+        return 0
 
     sys.stderr.write(f"error: unrecognized command: {args.command}\n")
     return 2

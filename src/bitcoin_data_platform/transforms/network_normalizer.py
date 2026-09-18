@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,7 @@ class NormalizedNetworkMetric:
     active_addresses_count: int  # Parsed from AdrActCnt (non-negative)
     ingested_at_utc: datetime
     source_run_id: str
+    mvrv_ratio: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -63,7 +65,7 @@ def create_network_raw_envelope(
     *,
     run_id: str,
     asset: str = "btc",
-    metrics: str = "TxCnt,AdrActCnt",
+    metrics: str = "TxCnt,AdrActCnt,CapMVRVCur",
     frequency: str = "1d",
     start_time: str,
     end_time: str,
@@ -219,6 +221,7 @@ def normalize_network_record(
             active_addresses_count=raw_record.active_addresses,
             ingested_at_utc=ingested_at_utc,
             source_run_id=source_run_id,
+            mvrv_ratio=raw_record.mvrv_ratio,
         )
 
     rec, violations = validate_record(raw_record)
@@ -233,6 +236,7 @@ def normalize_network_record(
         active_addresses_count=rec.active_addresses,
         ingested_at_utc=ingested_at_utc,
         source_run_id=source_run_id,
+        mvrv_ratio=rec.mvrv_ratio,
     )
 
 

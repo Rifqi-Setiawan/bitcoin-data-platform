@@ -38,7 +38,7 @@ def test_fetch_asset_metrics_success() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.params["assets"] == "btc"
-        assert request.url.params["metrics"] == "TxCnt,AdrActCnt"
+        assert request.url.params["metrics"] == "TxCnt,AdrActCnt,CapMVRVCur"
         assert request.url.params["frequency"] == "1d"
         assert request.url.params["start_time"] == "2026-01-01"
         assert request.url.params["end_time"] == "2026-01-07"
