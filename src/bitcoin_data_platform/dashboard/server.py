@@ -18,6 +18,7 @@ from typing import Any, cast
 import duckdb
 
 from bitcoin_data_platform.paper.engine import PaperTradingEngine
+from bitcoin_data_platform.storage.duckdb_manager import DuckDBManager
 
 logger = logging.getLogger(__name__)
 
@@ -1414,6 +1415,12 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_portfolio_equity(query)
         elif path == "/api/portfolio/trades":
             self._handle_portfolio_trades(query)
+        elif path == "/api/macro/radar":
+            self._handle_macro_radar(query)
+        elif path == "/api/macro/news":
+            self._handle_macro_news(query)
+        elif path == "/api/macro/calendar":
+            self._handle_macro_calendar(query)
         elif path == "/favicon.ico":
             self.send_response(204)
             self.end_headers()
@@ -1648,6 +1655,139 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
             trades = []
 
         self._send_json(trades)
+
+    def _handle_macro_radar(self, query: dict[str, list[str]]) -> None:
+        """Serve latest synthesized Macro Radar metrics, MNI score, and regime."""
+        db_path = self.dashboard_server.db_path
+        regime_labels = {
+            "RISK_ON_EXPANSION": "Risk-On Expansion (Akumulasi Agresif)",
+            "CAUTIOUS_BULL": "Cautious Bull (Akumulasi Oportunistik)",
+            "NEUTRAL_CHOP": "Neutral Chop (DCA Standar)",
+            "RISK_OFF_DEFENSE": "Risk-Off Defense (Cadangan Kas Defensif)",
+            "BLACK_SWAN_CRISIS": "Black Swan Crisis (Circuit Breaker Tripped)",
+        }
+        try:
+            db_mgr = DuckDBManager(db_path=db_path)
+            with db_mgr:
+                report = db_mgr.get_latest_narrative_intelligence()
+            if report is not None:
+                data = {
+                    "date": report.intelligence_date.isoformat(),
+                    "composite_mni": report.composite_mni,
+                    "regime": report.regime.value,
+                    "regime_label": regime_labels.get(report.regime.value, report.regime.value),
+                    "black_swan_flag": report.black_swan_flag,
+                    "scores": {
+                        "hard_macro": report.hard_macro_score,
+                        "sentiment": report.sentiment_score,
+                        "narrative": report.narrative_score,
+                    },
+                    "narrative_summary": report.narrative_summary_id,
+                    "dominant_pillar": report.dominant_pillar.value,
+                    "critical_alerts_count": report.active_critical_alerts,
+                    "last_updated_utc": report.synthesized_at_utc.isoformat(),
+                }
+                self._send_json(data)
+                return
+        except Exception as exc:
+            logger.warning("Failed querying macro radar: %s, using fallback", exc)
+
+        # Resilient fallback
+        now = datetime.now(UTC)
+        fallback = {
+            "date": now.date().isoformat(),
+            "composite_mni": 0.0,
+            "regime": "NEUTRAL_CHOP",
+            "regime_label": "Neutral Chop (DCA Standar)",
+            "black_swan_flag": False,
+            "scores": {
+                "hard_macro": 0.0,
+                "sentiment": 0.0,
+                "narrative": 0.0,
+            },
+            "narrative_summary": (
+                "Pasar konsolidasi netral tanpa anomali atau ancaman makro dominan."
+            ),
+            "dominant_pillar": "GENERAL",
+            "critical_alerts_count": 0,
+            "last_updated_utc": now.isoformat(),
+        }
+        self._send_json(fallback)
+
+    def _handle_macro_news(self, query: dict[str, list[str]]) -> None:
+        """Serve verified news items with mandatory original source hyperlinks."""
+        limit_str = query.get("limit", ["20"])[0]
+        try:
+            limit = int(limit_str)
+        except ValueError:
+            limit = 20
+
+        db_path = self.dashboard_server.db_path
+        try:
+            db_mgr = DuckDBManager(db_path=db_path)
+            with db_mgr:
+                raw_articles = db_mgr.get_macro_articles(limit=limit)
+            results = [
+                {
+                    "article_id": a["article_id"],
+                    "source": a["source"],
+                    "title": a["title"],
+                    "url": a["url"],
+                    "published_utc": a["published_utc"],
+                    "pillar": a["pillar"],
+                    "severity": a["severity"],
+                    "polarity": a["polarity"],
+                    "summary": a.get("summary", ""),
+                }
+                for a in raw_articles
+            ]
+            self._send_json(results)
+        except Exception as exc:
+            logger.warning("Failed querying macro news: %s, returning empty list", exc)
+            self._send_json([])
+
+    def _handle_macro_calendar(self, query: dict[str, list[str]]) -> None:
+        """Serve scheduled and recent economic releases with surprise evaluations."""
+        days_str = query.get("days", ["7"])[0]
+        try:
+            days = int(days_str)
+        except ValueError:
+            days = 7
+
+        db_path = self.dashboard_server.db_path
+        try:
+            db_mgr = DuckDBManager(db_path=db_path)
+            with db_mgr:
+                raw_releases = db_mgr.get_macro_economic_releases(days=days)
+            results = []
+            for r in raw_releases:
+                score = float(r.get("directional_score") or 0.0)
+                if score > 0.05:
+                    bias = "DOVISH"
+                elif score < -0.05:
+                    bias = "HAWKISH"
+                else:
+                    bias = "NEUTRAL"
+
+                results.append(
+                    {
+                        "release_id": r["release_id"],
+                        "event_name": r["event_name"],
+                        "country": r["country"],
+                        "release_date": r["release_date"],
+                        "release_time_utc": r["release_time_utc"],
+                        "impact": r["impact"],
+                        "actual": r.get("actual_value"),
+                        "forecast": r.get("forecast_value"),
+                        "previous": r.get("previous_value"),
+                        "surprise": r.get("surprise_delta"),
+                        "directional_bias": bias,
+                    }
+                )
+            self._send_json(results)
+        except Exception as exc:
+            logger.warning("Failed querying macro calendar: %s, returning empty list", exc)
+            self._send_json([])
 
     def _send_json(self, data: Any, status: int = 200) -> None:
         """Serialize and send JSON response."""

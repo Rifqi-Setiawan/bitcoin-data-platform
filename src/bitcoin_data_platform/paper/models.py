@@ -155,9 +155,30 @@ class PaperSummary:
 class RiskCheckResult:
     """Pre-trade risk verification verdict from RiskGuard."""
 
-    allowed: bool
-    reason: str
+    allowed: bool = True
+    reason: str = "All risk checks passed"
     details: dict[str, Any] = field(default_factory=dict)
+    passed: bool = True
+
+    def __init__(
+        self,
+        allowed: bool | None = None,
+        reason: str = "All risk checks passed",
+        details: dict[str, Any] | None = None,
+        *,
+        passed: bool | None = None,
+    ) -> None:
+        if allowed is not None:
+            eff_allowed = allowed
+        elif passed is not None:
+            eff_allowed = passed
+        else:
+            eff_allowed = True
+
+        object.__setattr__(self, "allowed", eff_allowed)
+        object.__setattr__(self, "passed", eff_allowed)
+        object.__setattr__(self, "reason", reason)
+        object.__setattr__(self, "details", details if details is not None else {})
 
     def to_dict(self) -> dict[str, Any]:
         """Convert risk check result to dictionary."""

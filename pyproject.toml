@@ -58,11 +58,12 @@ select = [
     "C4",   # flake8-comprehensions
     "SIM",  # flake8-simplify
 ]
-ignore = []
+ignore = ["UP042", "UP047"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+exclude = ["docs/**"]
 
 [tool.mypy]
 python_version = "3.12"

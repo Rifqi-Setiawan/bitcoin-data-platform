@@ -414,7 +414,109 @@ Immutable execution order blotter recording all systematic DCA purchases and hol
 
 ---
 
-## 13. Type System & Serialization Conventions
+## 13. Phase 16: Macro & Narrative Intelligence Tables & Marts
+
+### 13.1 macro_news_articles
+
+#### Description
+Stores curated, deduplicated multi-source crypto news articles with lexical polarity scoring, thematic pillar classification, and black swan severity tagging.
+
+- **Layer**: Macro & Narrative Ingestion Layer
+- **Physical Location**: `data/state/platform.duckdb`
+- **Primary Key**: `article_id` (SHA-256 hash of `source:url:title`)
+
+| Column Name | Data Type | Nullable | Description & Business Rules |
+| :--- | :--- | :--- | :--- |
+| `article_id` | `VARCHAR` | No | Deterministic SHA-256 hash of source, url, and title. Primary key. |
+| `source` | `VARCHAR` | No | Publisher feed source (e.g. `CoinDesk`, `Cointelegraph`, `Decrypt`, `BitcoinMagazine`). |
+| `title` | `VARCHAR` | No | Human-readable article headline text. |
+| `url` | `VARCHAR` | No | Verifiable canonical hyperlink pointing to upstream original publisher. |
+| `published_utc` | `TIMESTAMPTZ` | No | RFC 822 / ISO-8601 publication timestamp normalized to UTC. |
+| `summary` | `VARCHAR` | No | Cleaned textual abstract or excerpt without HTML tags. |
+| `pillar` | `VARCHAR` | No | Thematic pillar (`REGULATORY`, `SECURITY_EXPLOIT`, `INSTITUTIONAL`, `MACRO_LIQUIDITY`, `GENERAL`). |
+| `severity` | `VARCHAR` | No | Alert severity level (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`). |
+| `polarity` | `DOUBLE` | No | Lexical sentiment polarity score bounded strictly within `[-1.0, +1.0]`. |
+| `matched_keywords` | `VARCHAR` | No | Comma-separated matched keyword tokens for full scoring auditability. |
+| `ingested_at_utc` | `TIMESTAMPTZ` | No | UTC timestamp when the article was fetched and persisted. |
+
+### 13.2 macro_economic_releases
+
+#### Description
+Maintains parsed macroeconomic calendar announcements with actual vs. forecast economic surprise deltas and directional liquidity impact scores.
+
+- **Layer**: Macro Ingestion & Analytics Layer
+- **Physical Location**: `data/state/platform.duckdb`
+- **Primary Key**: `release_id` (SHA-256 hash of `event_name:date_utc:country`)
+
+| Column Name | Data Type | Nullable | Description & Business Rules |
+| :--- | :--- | :--- | :--- |
+| `release_id` | `VARCHAR` | No | Deterministic SHA-256 release identifier. Primary key. |
+| `event_name` | `VARCHAR` | No | Indicator title (e.g. `Core CPI m/m`, `Non-Farm Employment Change`, `Fed Funds Rate`). |
+| `country` | `VARCHAR` | No | Currency/sovereign denomination code (e.g. `USD`). |
+| `release_date` | `DATE` | No | Calendar release date in UTC. |
+| `release_time_utc` | `VARCHAR` | No | Release time of day (e.g. `12:30` or `18:00`). |
+| `impact` | `VARCHAR` | No | ForexFactory qualitative market impact rating (`High`, `Medium`, `Low`, `Holiday`). |
+| `actual_value` | `DOUBLE` | Yes | Published actual numeric figure, or `NULL` if upcoming. |
+| `forecast_value` | `DOUBLE` | Yes | Institutional consensus forecasted metric value. |
+| `previous_value` | `DOUBLE` | Yes | Prior calendar period metric figure. |
+| `surprise_delta` | `DOUBLE` | Yes | Normalized economic surprise delta (`actual - forecast`). |
+| `directional_score` | `DOUBLE` | No | Directional liquidity impact score bounded within `[-1.0, +1.0]` (Hawkish < 0, Dovish > 0). |
+| `raw_payload_json` | `VARCHAR` | Yes | Original upstream JSON payload string for audit compliance. |
+| `ingested_at_utc` | `TIMESTAMPTZ` | No | UTC timestamp of ingestion. |
+
+### 13.3 daily_narrative_intelligence
+
+#### Description
+Stores daily consolidated reports combining 3-tier synthesis (Hard Macro, Market Sentiment, Narrative Polarity), Composite MNI, 5-regime classification, and Indonesian market commentary.
+
+- **Layer**: Macro Narrative Mart Layer
+- **Physical Location**: `data/state/platform.duckdb`
+- **Primary Key**: `intelligence_date`
+
+| Column Name | Data Type | Nullable | Description & Business Rules |
+| :--- | :--- | :--- | :--- |
+| `intelligence_date` | `DATE` | No | Calendar evaluation date (UTC). Primary key. |
+| `synthesized_at_utc` | `TIMESTAMPTZ` | No | Exact UTC timestamp of report calculation and persistence. |
+| `hard_macro_score` | `DOUBLE` | No | Tier 1 exponential time-decayed economic score in `[-1.0, +1.0]`. |
+| `sentiment_score` | `DOUBLE` | No | Tier 2 composite sentiment score (40% FNG + 30% MVRV + 30% Mayer Multiple) in `[-1.0, +1.0]`. |
+| `narrative_score` | `DOUBLE` | No | Tier 3 hyperbolic tangent saturated news polarity score in `[-1.0, +1.0]`. |
+| `composite_mni` | `DOUBLE` | No | Composite Macro-Narrative Index (`0.40 * S_macro + 0.35 * S_sentiment + 0.25 * S_narrative`). |
+| `regime` | `VARCHAR` | No | 5-regime classification (`RISK_ON_EXPANSION`, `CAUTIOUS_BULL`, `NEUTRAL_CHOP`, `RISK_OFF_DEFENSE`, `BLACK_SWAN_CRISIS`). |
+| `black_swan_flag` | `BOOLEAN` | No | Emergency binary indicator tripped by critical severity alerts or extreme contraction. |
+| `active_critical_alerts`| `INTEGER` | No | Count of active critical black swan alerts within trailing 24 hours. |
+| `dominant_pillar` | `VARCHAR` | No | Thematic news pillar exerting highest influence on current market regime. |
+| `narrative_summary_id` | `VARCHAR` | No | Localized Bahasa Indonesia intelligence narrative commentary with emoji posture indicators. |
+
+### 13.4 mart_macro_narrative_daily (Analytical View)
+
+#### Description
+Unified conformed analytical serving view joining daily market prices, moving averages, valuation multiples, and 3-tier macro narrative intelligence.
+
+- **Layer**: Curated Analytical Mart View
+- **Physical Location**: `data/state/platform.duckdb`
+- **Base Tables/Views**: `mart_btc_investment_signals_daily`, `daily_narrative_intelligence`
+
+| Column Name | Data Type | Nullable | Description & Business Rules |
+| :--- | :--- | :--- | :--- |
+| `trade_date_utc` | `DATE` | No | Calendar trade date in UTC. |
+| `market_close_usd` | `DOUBLE` | Yes | Daily closing spot price in USD. |
+| `sma_200` | `DOUBLE` | Yes | 200-day rolling simple moving average close. |
+| `mayer_multiple` | `DOUBLE` | Yes | Mayer Multiple valuation metric (`close / sma_200`). |
+| `mvrv_ratio` | `DOUBLE` | Yes | On-chain Market Value to Realized Value ratio. |
+| `fng_value` | `INTEGER` | Yes | Daily Crypto Fear & Greed Index score (0 to 100). |
+| `investment_signal` | `VARCHAR` | Yes | 5-tier quantitative DCA signal (`AGGRESSIVE_ACCUMULATE`, etc.). |
+| `composite_mni` | `DOUBLE` | No | Composite Macro-Narrative Index in `[-1.0, +1.0]`. Defaults to `0.0`. |
+| `macro_regime` | `VARCHAR` | No | Macro-Narrative regime classification. Defaults to `'NEUTRAL_CHOP'`. |
+| `black_swan_flag` | `BOOLEAN` | No | Emergency halt sentinel flag. Defaults to `FALSE`. |
+| `hard_macro_score` | `DOUBLE` | No | Tier 1 Hard Macro subscore in `[-1.0, +1.0]`. |
+| `sentiment_score` | `DOUBLE` | No | Tier 2 Sentiment subscore in `[-1.0, +1.0]`. |
+| `narrative_score` | `DOUBLE` | No | Tier 3 Narrative subscore in `[-1.0, +1.0]`. |
+| `narrative_summary_id` | `VARCHAR` | Yes | Localized narrative commentary in Bahasa Indonesia. |
+| `active_critical_alerts`| `INTEGER` | No | Count of active critical black swan alerts. |
+
+---
+
+## 14. Type System & Serialization Conventions
 
 - **Monetary & Volume Precision**: All monetary prices and asset volumes are maintained as fixed-point `DECIMAL(38,18)` in Parquet and DuckDB to eliminate binary floating-point roundoff errors.
 - **Timezone Invariant**: All timestamps are strictly UTC with explicit timezone offset (`TIMESTAMPTZ` / `pyarrow.timestamp("us", tz="UTC")`). Naive datetimes are forbidden.

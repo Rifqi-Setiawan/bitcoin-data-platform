@@ -205,6 +205,10 @@
           <span>💼</span> Portofolio Simulasi ($1,000)
           <span class="px-1.5 py-0.5 text-[10px] font-bold rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">FORWARD DCA</span>
         </button>
+        <button id="tabMacroBtn" onclick="switchMainTab('macro')" class="flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all">
+          <span>📡</span> Macro Radar
+          <span class="px-1.5 py-0.5 text-[10px] font-bold rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">MNI ENGINE</span>
+        </button>
       </div>
       <div class="flex items-center gap-3 text-xs text-zinc-400">
         <span class="w-2 h-2 rounded-full bg-emerald-400 live-dot"></span>
@@ -840,6 +844,166 @@
       </section>
 
     </div> <!-- END portfolioView -->
+
+    <!-- ========================================== -->
+    <!-- 3. VIEW: MACRO RADAR & NARRATIVE INTELLIGENCE -->
+    <!-- ========================================== -->
+    <div id="macroView" class="space-y-6 hidden">
+
+      <!-- ========================================== -->
+      <!-- MACRO RADAR OVERVIEW & COMPOSITE MNI CARDS -->
+      <!-- ========================================== -->
+      <section class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        
+        <!-- Main Composite MNI Gauge Card -->
+        <div class="lg:col-span-2 bg-dark-card rounded-xl p-5 card-border flex flex-col justify-between relative overflow-hidden">
+          <div>
+            <div class="flex items-center justify-between text-zinc-400 mb-2">
+              <span class="text-xs font-semibold text-zinc-300 flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-sky-400 live-dot"></span>
+                Composite Macro-Narrative Index (MNI)
+              </span>
+              <span id="macroRegimeBadge" class="px-2.5 py-1 text-xs font-bold rounded-lg border tabular bg-slate-500/20 text-slate-300 border-slate-500/30">
+                NEUTRAL_CHOP
+              </span>
+            </div>
+            
+            <div class="flex items-baseline gap-3 my-2">
+              <h2 id="macroMniScore" class="text-3xl sm:text-4xl font-extrabold text-white tabular tracking-tight">0.00</h2>
+              <span class="text-xs text-zinc-400 font-mono">Skala: [-1.00 s/d +1.00]</span>
+            </div>
+
+            <!-- Sentinel Alert Banner -->
+            <div class="flex items-center justify-between p-2.5 rounded-lg bg-black/40 border border-white/[0.06] mt-3">
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-medium text-zinc-400">Status Sentinel Black Swan:</span>
+                <span id="macroSentinelBadge" class="px-2 py-0.5 text-[11px] font-bold rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  ✅ AMAN (PASS)
+                </span>
+              </div>
+              <div class="text-[11px] font-mono text-zinc-400">
+                Peringatan Kritis: <span id="macroCriticalAlerts" class="text-white font-semibold">0</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="pt-3 mt-3 border-t border-white/[0.06] flex justify-between items-center text-[11px] text-zinc-400">
+            <span>Pilar Dominan: <strong id="macroDominantPillar" class="text-zinc-200">GENERAL</strong></span>
+            <span>Diperbarui: <span id="macroLastUpdated" class="font-mono text-zinc-300">-</span></span>
+          </div>
+        </div>
+
+        <!-- 3-Tier Subscores Card -->
+        <div class="lg:col-span-2 bg-dark-card rounded-xl p-5 card-border flex flex-col justify-between">
+          <div>
+            <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-3">Bobot 3-Domain Sintesis (3-Tier)</h3>
+            <div class="grid grid-cols-3 gap-3">
+              <div class="p-3 rounded-lg bg-black/30 border border-white/[0.04]">
+                <div class="text-[11px] text-zinc-400 mb-1">Tier 1: Makro (40%)</div>
+                <div id="macroHardMacroScore" class="text-xl font-bold text-white tabular">0.00</div>
+                <div class="text-[10px] text-zinc-500 mt-1">Kejutan CPI, NFP, FOMC</div>
+              </div>
+              <div class="p-3 rounded-lg bg-black/30 border border-white/[0.04]">
+                <div class="text-[11px] text-zinc-400 mb-1">Tier 2: Sentimen (35%)</div>
+                <div id="macroSentimentScore" class="text-xl font-bold text-white tabular">0.00</div>
+                <div class="text-[10px] text-zinc-500 mt-1">FNG, MVRV, Mayer Mult</div>
+              </div>
+              <div class="p-3 rounded-lg bg-black/30 border border-white/[0.04]">
+                <div class="text-[11px] text-zinc-400 mb-1">Tier 3: Naratif (25%)</div>
+                <div id="macroNarrativeScore" class="text-xl font-bold text-white tabular">0.00</div>
+                <div class="text-[10px] text-zinc-500 mt-1">Regulasi & Berita Kritis</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Commentary Box -->
+          <div class="p-3 rounded-lg bg-[#141720] border border-white/[0.08] mt-3">
+            <div class="text-[11px] uppercase tracking-wider font-bold text-amber-400 mb-1">Ringkasan Narasi Pasar (Bahasa Indonesia):</div>
+            <p id="macroNarrativeSummary" class="text-xs text-zinc-300 leading-relaxed">
+              Memuat data sintesis makro dan intelijen naratif...
+            </p>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ========================================== -->
+      <!-- SECTION: CURATED NEWS BLOTTER WITH LINKS -->
+      <!-- ========================================== -->
+      <section class="bg-dark-card rounded-xl card-border overflow-hidden">
+        <div class="p-4 border-b border-white/[0.06] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+              <span>📰</span> Agregator Berita Terverifikasi (Multi-Source News Feed)
+            </h3>
+            <p class="text-xs text-zinc-400 mt-0.5">
+              Kompilasi berita terkurasi dari CoinDesk, Cointelegraph, Decrypt, & Bitcoin Magazine dengan tautan asli terverifikasi.
+            </p>
+          </div>
+          <span class="text-[11px] font-mono text-zinc-400">Deduplikasi SHA-256 Otomatis</span>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs text-zinc-300">
+            <thead class="bg-black/40 text-zinc-400 text-[11px] font-medium border-b border-white/[0.06] uppercase tracking-wider">
+              <tr>
+                <th class="px-3 py-2.5">Waktu (UTC)</th>
+                <th class="px-3 py-2.5">Sumber</th>
+                <th class="px-3 py-2.5">Pillar</th>
+                <th class="px-3 py-2.5">Sentimen / Severity</th>
+                <th class="px-3 py-2.5">Headline Berita</th>
+                <th class="px-3 py-2.5 text-right">Tautan Sumber Asli</th>
+              </tr>
+            </thead>
+            <tbody id="macroNewsBody" class="divide-y divide-white/[0.03] tabular">
+              <tr>
+                <td colspan="6" class="p-4 text-center text-zinc-500">Memuat berita pasar terbaru...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- SECTION: MACROECONOMIC CALENDAR -->
+      <!-- ========================================== -->
+      <section class="bg-dark-card rounded-xl card-border overflow-hidden">
+        <div class="p-4 border-b border-white/[0.06] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+              <span>📅</span> Kalender Makroekonomi & Kejutan Indikator (ForexFactory)
+            </h3>
+            <p class="text-xs text-zinc-400 mt-0.5">
+              Jadwal rilis ekonomi berbobot tinggi beserta kalkulasi deviasi kejutan (Actual vs Forecast).
+            </p>
+          </div>
+          <span class="text-[11px] font-mono text-zinc-400">Jendela Decay 72 Jam</span>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs text-zinc-300">
+            <thead class="bg-black/40 text-zinc-400 text-[11px] font-medium border-b border-white/[0.06] uppercase tracking-wider">
+              <tr>
+                <th class="px-3 py-2.5">Waktu (UTC)</th>
+                <th class="px-3 py-2.5">Negara</th>
+                <th class="px-3 py-2.5">Rilis / Indikator</th>
+                <th class="px-3 py-2.5">Dampak</th>
+                <th class="px-3 py-2.5">Prakiraan</th>
+                <th class="px-3 py-2.5">Aktual</th>
+                <th class="px-3 py-2.5">Surprise Delta</th>
+                <th class="px-3 py-2.5 text-right">Bias Likuiditas</th>
+              </tr>
+            </thead>
+            <tbody id="macroCalendarBody" class="divide-y divide-white/[0.03] tabular">
+              <tr>
+                <td colspan="8" class="p-4 text-center text-zinc-500">Memuat agenda makroekonomi...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </div> <!-- END macroView -->
 
 
   <!-- ========================================== -->
@@ -1626,21 +1790,188 @@
       currentMainTab = tab;
       const marketView = document.getElementById('marketView');
       const portfolioView = document.getElementById('portfolioView');
+      const macroView = document.getElementById('macroView');
       const tabMarketBtn = document.getElementById('tabMarketBtn');
       const tabPortfolioBtn = document.getElementById('tabPortfolioBtn');
+      const tabMacroBtn = document.getElementById('tabMacroBtn');
+
+      const activeClass = 'flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-amber-500 text-zinc-950 shadow-sm transition-all';
+      const inactiveClass = 'flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all';
+
+      marketView.classList.add('hidden');
+      portfolioView.classList.add('hidden');
+      if (macroView) macroView.classList.add('hidden');
+
+      tabMarketBtn.className = inactiveClass;
+      tabPortfolioBtn.className = inactiveClass;
+      if (tabMacroBtn) tabMacroBtn.className = inactiveClass;
 
       if (tab === 'market') {
         marketView.classList.remove('hidden');
-        portfolioView.classList.add('hidden');
-        tabMarketBtn.className = 'flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-amber-500 text-zinc-950 shadow-sm transition-all';
-        tabPortfolioBtn.className = 'flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all';
-      } else {
-        marketView.classList.add('hidden');
+        tabMarketBtn.className = activeClass;
+      } else if (tab === 'portfolio') {
         portfolioView.classList.remove('hidden');
-        tabPortfolioBtn.className = 'flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-amber-500 text-zinc-950 shadow-sm transition-all';
-        tabMarketBtn.className = 'flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all';
-
+        tabPortfolioBtn.className = activeClass;
         loadPortfolioData();
+      } else if (tab === 'macro') {
+        if (macroView) macroView.classList.remove('hidden');
+        if (tabMacroBtn) tabMacroBtn.className = activeClass;
+        loadMacroData();
+      }
+    }
+
+    async function loadMacroData() {
+      await Promise.all([
+        fetchMacroRadar(),
+        fetchMacroNews(),
+        fetchMacroCalendar(),
+      ]);
+    }
+
+    async function fetchMacroRadar() {
+      try {
+        const resp = await fetch('/api/macro/radar');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data) return;
+
+        const mni = Number(data.composite_mni || 0.0);
+        const mniEl = document.getElementById('macroMniScore');
+        if (mniEl) mniEl.textContent = `${mni >= 0 ? '+' : ''}${mni.toFixed(2)}`;
+
+        const regimeEl = document.getElementById('macroRegimeBadge');
+        if (regimeEl) {
+          regimeEl.textContent = data.regime_label || data.regime || 'NEUTRAL_CHOP';
+          let badgeClass = 'bg-slate-500/20 text-slate-300 border-slate-500/30';
+          if (data.regime === 'RISK_ON_EXPANSION') badgeClass = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
+          else if (data.regime === 'CAUTIOUS_BULL') badgeClass = 'bg-sky-500/20 text-sky-400 border-sky-500/30';
+          else if (data.regime === 'RISK_OFF_DEFENSE') badgeClass = 'bg-amber-500/20 text-amber-400 border-amber-500/30';
+          else if (data.regime === 'BLACK_SWAN_CRISIS') badgeClass = 'bg-rose-500/25 text-rose-400 border-rose-500/40 animate-pulse';
+          regimeEl.className = `px-2.5 py-1 text-xs font-bold rounded-lg border tabular ${badgeClass}`;
+        }
+
+        const sentinelEl = document.getElementById('macroSentinelBadge');
+        if (sentinelEl) {
+          if (data.black_swan_flag) {
+            sentinelEl.textContent = '🚨 BLACK SWAN AKTIF';
+            sentinelEl.className = 'px-2 py-0.5 text-[11px] font-bold rounded bg-rose-500/20 text-rose-400 border border-rose-500/40 animate-pulse';
+          } else {
+            sentinelEl.textContent = '✅ AMAN (PASS)';
+            sentinelEl.className = 'px-2 py-0.5 text-[11px] font-bold rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+          }
+        }
+
+        const scores = data.scores || {};
+        const hm = Number(scores.hard_macro || 0.0);
+        const st = Number(scores.sentiment || 0.0);
+        const nr = Number(scores.narrative || 0.0);
+        const hmEl = document.getElementById('macroHardMacroScore');
+        if (hmEl) hmEl.textContent = `${hm >= 0 ? '+' : ''}${hm.toFixed(2)}`;
+        const stEl = document.getElementById('macroSentimentScore');
+        if (stEl) stEl.textContent = `${st >= 0 ? '+' : ''}${st.toFixed(2)}`;
+        const nrEl = document.getElementById('macroNarrativeScore');
+        if (nrEl) nrEl.textContent = `${nr >= 0 ? '+' : ''}${nr.toFixed(2)}`;
+
+        const pillarEl = document.getElementById('macroDominantPillar');
+        if (pillarEl) pillarEl.textContent = data.dominant_pillar || 'GENERAL';
+        const alertsEl = document.getElementById('macroCriticalAlerts');
+        if (alertsEl) alertsEl.textContent = `${data.critical_alerts_count || 0}`;
+        const summaryEl = document.getElementById('macroNarrativeSummary');
+        if (summaryEl) summaryEl.textContent = data.narrative_summary || 'Tidak ada ringkasan naratif.';
+        const updatedEl = document.getElementById('macroLastUpdated');
+        if (updatedEl) updatedEl.textContent = data.last_updated_utc ? new Date(data.last_updated_utc).toLocaleTimeString() + ' UTC' : '-';
+      } catch (err) {
+        console.error('Failed fetching macro radar:', err);
+      }
+    }
+
+    async function fetchMacroNews() {
+      try {
+        const resp = await fetch('/api/macro/news?limit=20');
+        if (!resp.ok) return;
+        const items = await resp.json();
+        const tbody = document.getElementById('macroNewsBody');
+        if (!tbody) return;
+        if (!items || items.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="p-4 text-center text-zinc-500">Belum ada berita terkurasi yang tercatat.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = items.map(item => {
+          const pubDate = item.published_utc ? new Date(item.published_utc).toISOString().replace('T', ' ').substring(0, 16) : '-';
+          const pol = Number(item.polarity || 0.0);
+          let polClass = 'text-zinc-400';
+          if (pol > 0.2) polClass = 'text-emerald-400';
+          else if (pol < -0.2) polClass = 'text-rose-400';
+
+          const sev = item.severity || 'LOW';
+          let sevBadge = 'bg-zinc-800 text-zinc-400 border-zinc-700';
+          if (sev === 'CRITICAL') sevBadge = 'bg-rose-500/20 text-rose-400 border-rose-500/30 font-bold';
+          else if (sev === 'HIGH') sevBadge = 'bg-amber-500/20 text-amber-400 border-amber-500/30';
+
+          return `
+            <tr class="hover:bg-white/[0.02] transition-colors border-b border-white/[0.04]">
+              <td class="px-3 py-2.5 font-mono text-zinc-400 text-[11px] whitespace-nowrap">${pubDate}</td>
+              <td class="px-3 py-2.5 font-semibold text-zinc-300 text-xs">${item.source}</td>
+              <td class="px-3 py-2.5">
+                <span class="px-1.5 py-0.5 text-[10px] font-mono rounded bg-white/[0.04] text-zinc-300 border border-white/[0.08]">${item.pillar}</span>
+              </td>
+              <td class="px-3 py-2.5 whitespace-nowrap">
+                <span class="px-1.5 py-0.5 text-[10px] rounded border ${sevBadge}">${sev}</span>
+                <span class="ml-1 text-[11px] font-mono ${polClass}">${pol >= 0 ? '+' : ''}${pol.toFixed(2)}</span>
+              </td>
+              <td class="px-3 py-2.5 text-zinc-200 text-xs font-medium max-w-md truncate" title="${item.title}">${item.title}</td>
+              <td class="px-3 py-2.5 whitespace-nowrap text-right">
+                <a href="${item.url}" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:text-sky-300 hover:underline font-mono text-[11px] inline-flex items-center gap-1">
+                  Buka Berita ↗
+                </a>
+              </td>
+            </tr>
+          `;
+        }).join('');
+      } catch (err) {
+        console.error('Failed fetching macro news:', err);
+      }
+    }
+
+    async function fetchMacroCalendar() {
+      try {
+        const resp = await fetch('/api/macro/calendar?days=7');
+        if (!resp.ok) return;
+        const items = await resp.json();
+        const tbody = document.getElementById('macroCalendarBody');
+        if (!tbody) return;
+        if (!items || items.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="8" class="p-4 text-center text-zinc-500">Belum ada agenda makroekonomi yang tercatat.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = items.map(item => {
+          let biasClass = 'bg-zinc-800 text-zinc-400 border-zinc-700';
+          if (item.directional_bias === 'DOVISH') biasClass = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
+          else if (item.directional_bias === 'HAWKISH') biasClass = 'bg-rose-500/20 text-rose-400 border-rose-500/30';
+
+          const surprise = item.surprise !== null && item.surprise !== undefined ? `${item.surprise >= 0 ? '+' : ''}${item.surprise}` : '-';
+
+          return `
+            <tr class="hover:bg-white/[0.02] transition-colors border-b border-white/[0.04]">
+              <td class="px-3 py-2.5 font-mono text-zinc-400 text-[11px] whitespace-nowrap">${item.release_date} ${item.release_time_utc}</td>
+              <td class="px-3 py-2.5 font-mono font-semibold text-zinc-300 text-xs">${item.country}</td>
+              <td class="px-3 py-2.5 text-zinc-200 text-xs font-medium">${item.event_name}</td>
+              <td class="px-3 py-2.5">
+                <span class="px-1.5 py-0.5 text-[10px] font-bold rounded ${item.impact === 'High' ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'}">${item.impact}</span>
+              </td>
+              <td class="px-3 py-2.5 font-mono text-zinc-400 text-xs">${item.forecast !== null && item.forecast !== undefined ? item.forecast : '-'}</td>
+              <td class="px-3 py-2.5 font-mono text-zinc-200 text-xs font-semibold">${item.actual !== null && item.actual !== undefined ? item.actual : '-'}</td>
+              <td class="px-3 py-2.5 font-mono text-xs ${item.surprise && item.surprise > 0 ? 'text-amber-400' : 'text-zinc-300'}">${surprise}</td>
+              <td class="px-3 py-2.5 whitespace-nowrap text-right">
+                <span class="px-2 py-0.5 text-[10px] font-bold rounded border ${biasClass}">${item.directional_bias}</span>
+              </td>
+            </tr>
+          `;
+        }).join('');
+      } catch (err) {
+        console.error('Failed fetching macro calendar:', err);
       }
     }
 
@@ -1969,8 +2300,9 @@
       fetchTradesData(currentAsset);
       fetchLedgerData(currentAsset);
 
-      // Pre-load portfolio data in background
+      // Pre-load portfolio and macro data in background
       loadPortfolioData();
+      loadMacroData();
 
       streamInterval = setInterval(generateNextTrade, 2000);
     });
