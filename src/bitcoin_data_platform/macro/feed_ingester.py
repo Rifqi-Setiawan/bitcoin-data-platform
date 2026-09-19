@@ -27,10 +27,15 @@ DEFAULT_FEEDS: dict[str, str] = {
     "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "Cointelegraph": "https://cointelegraph.com/rss",
     "Decrypt": "https://decrypt.co/feed",
-    "BitcoinMagazine": "https://bitcoinmagazine.com/.rss/full/",
+    "TheBlock": "https://www.theblock.co/rss.xml",
+    "FederalReserve": "https://www.federalreserve.gov/feeds/press_monetary.xml",
+    "MarketWatch": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
 }
 
-DEFAULT_USER_AGENT = "bitcoin-data-platform/0.1.0"
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 (bitcoin-data-platform/0.1.0)"
+)
 RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
@@ -124,6 +129,7 @@ class FeedIngester:
             self._client = httpx.Client(
                 timeout=effective_timeout,
                 transport=transport,
+                follow_redirects=True,
                 headers={
                     "User-Agent": self.user_agent,
                     "Accept": "application/rss+xml, application/xml, text/xml, */*",
