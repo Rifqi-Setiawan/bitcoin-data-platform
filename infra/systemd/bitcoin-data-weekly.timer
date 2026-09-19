@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Bitcoin Data Platform Weekly Pipeline on Mondays at 01:00 UTC
+Documentation=https://github.com/Rifqi-Setiawan/bitcoin-data-platform
+
+[Timer]
+OnCalendar=Mon *-*-* 01:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

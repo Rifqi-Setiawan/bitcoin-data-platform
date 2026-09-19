@@ -658,6 +658,11 @@ bitcoin-data dashboard \
 - `GET /api/macro/radar`: Returns latest synthesized Macro Radar metrics, Composite MNI gauge, 3-tier subscores, and regime.
 - `GET /api/macro/news?limit=20`: Returns curated multi-source news items with verified clickable original hyperlinks (`target="_blank"`).
 - `GET /api/macro/calendar?days=7`: Returns macroeconomic announcements with evaluated economic surprise deltas and liquidity directional biases.
+- `GET /api/committee/latest`: Returns latest Investment Committee memorandum, multi-persona consensus votes, and invariant execution receipts.
+- `GET /api/committee/history?limit=30`: Returns historical investment memorandums.
+- `POST /api/intelligence/ingest`: Ingests user-submitted market intelligence, thesis notes, and research links into DuckDB `user_market_intelligence`.
+- `GET /api/intelligence/list?limit=50`: Returns active user intelligence records with sentiment and pillar metadata.
+- `GET /api/pipeline/schedule`: Returns status of layered systemd timers (hourly, daily, weekly) and run lock states.
 
 ### Forward Paper Trading Simulation (Phase 15)
 
@@ -707,6 +712,56 @@ bitcoin-data macro radar --format json
 bitcoin-data macro status
 ```
 
+### Agentic Investment Committee & User Intelligence Ingestion (Phase 17)
+
+An institutional-grade, fully autonomous **Agentic Investment Decision System** solving the critical AutoHedge failure mode ("Risk-as-a-Prompt") through a **Dual-System Neuro-Symbolic architecture**:
+- **System 1 (Neural Reasoner / AI Committee)**: Multi-persona deliberation (`MacroStrategist`, `ValuationAnalyst`, `RiskOfficer`) evaluating conformed market, on-chain, macro, and user-injected alpha to propose tactical allocations and generate institutional memorandums in Bahasa Indonesia.
+- **System 2 (Symbolic Solver / Pre-Trade RiskGuard)**: Pure Python deterministic invariant verifier that mathematically validates 6 hard boundaries (absolute solvency, 15% daily tactical reserve cap, $\pm 2\text{h}$ macro announcement buffers, black swan circuit breakers, 25% max drawdown, spot deviation) and strictly clamps neural proposals ($D_{\text{executed}} = \min(D_{\text{proposed}}, D_{\text{max\_allowed}})$).
+
+```bash
+# 1. Ingest user market intelligence thesis or external research article
+bitcoin-data intelligence ingest \
+  --title "Q4 Liquidity Pivot Hypothesis" \
+  --thesis "Anticipating accelerated central bank liquidity easing into year-end" \
+  --url "https://example.com/research-note" \
+  --pillar MACRO_LIQUIDITY \
+  --sentiment 0.75 \
+  --confidence 0.85
+
+# 2. List active user intelligence alpha records
+bitcoin-data intelligence list --format table
+
+# 3. Deliberate daily investment session with multi-persona committee
+bitcoin-data committee deliberate --date 2026-09-19 --provider mock
+
+# 4. Display rendered investment memorandum (text, json, or markdown)
+bitcoin-data committee memo --format markdown
+
+# 5. Audit committee operational status and latest consensus
+bitcoin-data committee status
+```
+
+### Layered Automated Scheduling Pipeline (Phase 17)
+
+A resilient, tiered 24/7 VPS scheduling engine coordinating background execution without DuckDB lock contention or memory spikes, supervised by POSIX file locks:
+- **Hourly (`*:05 UTC`)**: Ingests multi-source RSS news, runs lexical black swan scans, and dispatches emergency Telegram alerts (<15s runtime, <150MB RAM).
+- **Daily (`00:05 UTC`)**: Ingests daily market candles, updates Fear & Greed / macro calendar, synthesizes 3-tier MNI, executes Investment Committee deliberation, validates RiskGuard invariants, advances forward paper trading step, and updates mark-to-market equity.
+- **Weekly (`Mon 01:00 UTC`)**: Audits portfolio drawdowns, reviews acquisition cost discounts, evaluates tactical reserve health, and generates retrospective summaries.
+
+```bash
+# 1. Execute hourly news ingestion and black swan scan (*:05 UTC)
+bitcoin-data pipeline run-hourly
+
+# 2. Execute daily pipeline: MNI, committee deliberation, paper step, memo (00:05 UTC)
+bitcoin-data pipeline run-daily
+
+# 3. Execute weekly portfolio drawdown and retrospective audit (Mon 01:00 UTC)
+bitcoin-data pipeline run-weekly
+
+# 4. Inspect pipeline concurrency lock states and execution health
+bitcoin-data pipeline status
+```
+
 ## Quality gates
 
 Run the documented quality gates:
@@ -750,6 +805,7 @@ make clean-dist # remove build and packaging artifacts
 - [Phase 14 Specification](docs/specs/PHASE_14_BACKTEST_VALIDATION.md)
 - [Phase 15 Specification](docs/specs/PHASE_15_FORWARD_PAPER_TRADING_DASHBOARD.md)
 - [Phase 16 Specification](docs/specs/PHASE_16_MACRO_NARRATIVE_INTELLIGENCE.md)
+- [Phase 17 Specification](docs/specs/PHASE_17_AGENTIC_INVESTMENT_COMMITTEE.md)
 - [Official Data Dictionary](docs/data_dictionary/DATA_DICTIONARY.md)
 - [ADR D-008: Container Evaluation](docs/decisions/D-008_CONTAINER_EVALUATION.md)
 - [ADR D-009: dbt-core Evaluation](docs/decisions/D-009_DBT_EVALUATION.md)

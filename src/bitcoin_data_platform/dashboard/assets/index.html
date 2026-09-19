@@ -209,6 +209,10 @@
           <span>📡</span> Macro Radar
           <span class="px-1.5 py-0.5 text-[10px] font-bold rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">MNI ENGINE</span>
         </button>
+        <button id="tabCommitteeBtn" onclick="switchMainTab('committee')" class="flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all">
+          <span>🏛️</span> Komite Investasi
+          <span class="px-1.5 py-0.5 text-[10px] font-bold rounded bg-purple-500/20 text-purple-400 border border-purple-500/30">AI COMMITTEE</span>
+        </button>
       </div>
       <div class="flex items-center gap-3 text-xs text-zinc-400">
         <span class="w-2 h-2 rounded-full bg-emerald-400 live-dot"></span>
@@ -1005,6 +1009,210 @@
 
     </div> <!-- END macroView -->
 
+    <!-- ========================================== -->
+    <!-- 4. VIEW: KOMITE INVESTASI (AGENTIC COMMITTEE) -->
+    <!-- ========================================== -->
+    <div id="committeeView" class="space-y-6 hidden">
+
+      <!-- Executive Memorandum & Dual-System Action Hero -->
+      <section class="p-5 sm:p-6 rounded-xl bg-[#0F1218] border border-white/[0.07] relative overflow-hidden">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-white/[0.06]">
+          <div class="space-y-1">
+            <div class="flex items-center gap-2">
+              <span class="px-2 py-0.5 rounded text-[11px] font-bold bg-purple-500/20 text-purple-400 border border-purple-500/30">NEURO-SYMBOLIC COMMITTEE</span>
+              <span id="commMemoDate" class="text-xs font-mono text-zinc-400 tabular">2026-09-19</span>
+              <span id="commRegimeBadge" class="px-2 py-0.5 rounded text-[11px] font-semibold bg-sky-500/15 text-sky-400 border border-sky-500/25">NEUTRAL_CHOP</span>
+            </div>
+            <h2 class="text-xl sm:text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+              <span>🏛️</span> Institutional Investment Memorandum
+            </h2>
+          </div>
+          <div class="flex flex-wrap items-center gap-3">
+            <div class="text-right">
+              <div class="text-[10px] text-zinc-400 uppercase tracking-wider">Konsensus Komite</div>
+              <div id="commConsensusScore" class="text-lg font-bold text-white tabular font-mono">+0.38</div>
+            </div>
+            <div id="commActionBadge" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 tracking-wide">
+              OPPORTUNISTIC_BUY
+            </div>
+          </div>
+        </div>
+
+        <!-- Indonesian Executive Summary -->
+        <div class="mt-4 p-4 rounded-lg bg-[#0B0E14] border border-white/[0.05] space-y-2">
+          <div class="text-[11px] font-semibold text-amber-400 uppercase tracking-wider flex items-center gap-2">
+            <span>🇮🇩</span> Ringkasan Eksekutif Komite
+          </div>
+          <p id="commExecutiveSummary" class="text-sm text-zinc-300 leading-relaxed">
+            Komite Investasi merekomendasikan akumulasi terukur. Parameter risiko dan solvabilitas modal dalam batas aman.
+          </p>
+        </div>
+
+        <!-- Neuro-Symbolic Gatekeeper Receipt Comparison -->
+        <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="p-4 rounded-lg bg-[#141720] border border-white/[0.05] space-y-1">
+            <div class="text-[11px] text-zinc-400 uppercase font-semibold">Usulan Alokasi Neural (AI Committee)</div>
+            <div id="commNeuralAlloc" class="text-2xl font-bold text-purple-400 tabular font-mono">$35.00</div>
+            <div class="text-[11px] text-zinc-400">Rekomendasi taktis murni dari konsensus 3 persona ahli</div>
+          </div>
+          <div class="p-4 rounded-lg bg-[#141720] border border-white/[0.05] space-y-1">
+            <div class="flex items-center justify-between">
+              <div class="text-[11px] text-zinc-400 uppercase font-semibold">Eksekusi Simbolik (Pre-Trade RiskGuard)</div>
+              <span id="commClampedBadge" class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">CLAMPED</span>
+            </div>
+            <div id="commExecutedAlloc" class="text-2xl font-bold text-emerald-400 tabular font-mono">$22.50</div>
+            <div id="commClampingReason" class="text-[11px] text-zinc-400 truncate">Pagu cadangan taktis harian 15% diterapkan</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Persona Ballots: 3 Expert Personas -->
+      <section class="space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-zinc-200 uppercase tracking-wider">Suara & Tesis Persona Ahli Komite</h3>
+          <span class="text-xs text-zinc-400">Bobot Konsensus: Makro 35% | Valuasi 35% | Risiko 30%</span>
+        </div>
+        <div id="personaCardsGrid" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <!-- Populated dynamically via JS -->
+        </div>
+      </section>
+
+      <!-- Symbolic Invariant Verification Panel -->
+      <section class="p-5 rounded-xl bg-[#0F1218] border border-white/[0.07] space-y-3">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="text-sm font-semibold text-zinc-200 uppercase tracking-wider">Pre-Trade RiskGuard Invariant Verification</h3>
+            <p class="text-xs text-zinc-400">Verifikasi 6 batas matematis deterministik sub-milidetik sebelum order diteruskan ke ledger</p>
+          </div>
+          <span class="px-2 py-1 rounded text-[11px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20">Zero Hallucination</span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs text-zinc-300">
+            <thead class="border-b border-white/[0.06] text-zinc-400 uppercase text-[10px] tracking-wider">
+              <tr>
+                <th class="py-2 px-3">Invariant Safety Rule</th>
+                <th class="py-2 px-3">Ambang Batas / Formula</th>
+                <th class="py-2 px-3">Status Verifikasi</th>
+                <th class="py-2 px-3">Detail & Justifikasi</th>
+              </tr>
+            </thead>
+            <tbody id="invariantsTableBody" class="divide-y divide-white/[0.04] tabular font-mono text-xs">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- User Intelligence Ingestion Drawer & Alpha Blotter -->
+      <section class="p-5 rounded-xl bg-[#0F1218] border border-white/[0.07] space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 class="text-sm font-semibold text-zinc-200 uppercase tracking-wider flex items-center gap-2">
+              <span>🧠</span> User Market Intelligence & Alpha Blotter
+            </h3>
+            <p class="text-xs text-zinc-400">Injeksi riset, hipotesis makro, dan URL artikel langsung ke prompt deliberasi AI Komite (Half-life 24 jam)</p>
+          </div>
+          <button onclick="toggleIntelModal(true)" class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white shadow transition-all">
+            <span>➕</span> Ingest Intelligence
+          </button>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs text-zinc-300">
+            <thead class="border-b border-white/[0.06] text-zinc-400 uppercase text-[10px] tracking-wider">
+              <tr>
+                <th class="py-2 px-3">ID & Waktu (UTC)</th>
+                <th class="py-2 px-3">Pillar</th>
+                <th class="py-2 px-3">Judul & Tesis Analitis</th>
+                <th class="py-2 px-3">Sentimen & Keyakinan</th>
+                <th class="py-2 px-3 text-right">Tautan Sumber Asli</th>
+              </tr>
+            </thead>
+            <tbody id="intelligenceBlotterBody" class="divide-y divide-white/[0.04] tabular">
+              <tr>
+                <td colspan="5" class="py-4 text-center text-zinc-500">Memuat data user intelligence...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Pipeline Scheduling Tier Status -->
+      <section class="p-5 rounded-xl bg-[#0F1218] border border-white/[0.07] space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-zinc-200 uppercase tracking-wider">Automated Scheduling Pipeline Status</h3>
+          <span class="text-xs font-mono text-zinc-400">Systemd Oneshot + Monotonic Timers</span>
+        </div>
+        <div id="pipelineCadenceCards" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <!-- Populated dynamically via JS -->
+        </div>
+      </section>
+
+    </div> <!-- END committeeView -->
+
+    <!-- ========================================== -->
+    <!-- USER INTELLIGENCE INGESTION MODAL -->
+    <!-- ========================================== -->
+    <div id="intelModal" class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+      <div class="bg-[#12151D] border border-white/[0.1] rounded-xl w-full max-w-lg p-6 space-y-4 shadow-2xl">
+        <div class="flex items-center justify-between pb-3 border-b border-white/[0.08]">
+          <h3 class="text-base font-bold text-white flex items-center gap-2">
+            <span>🧠</span> Ingest User Market Intelligence
+          </h3>
+          <button onclick="toggleIntelModal(false)" class="text-zinc-400 hover:text-white text-lg font-bold">&times;</button>
+        </div>
+        <div class="space-y-3 text-xs">
+          <div>
+            <label class="block text-zinc-400 font-semibold mb-1">Judul / Headline Catatan</label>
+            <input id="intelTitle" type="text" placeholder="e.g. Fed Menyesuaikan Laju QT" class="w-full px-3 py-2 rounded bg-[#0B0E14] border border-white/[0.08] text-white focus:outline-none focus:border-purple-500" />
+          </div>
+          <div>
+            <label class="block text-zinc-400 font-semibold mb-1">Tesis Analitis Pengguna <span class="text-rose-400">*</span></label>
+            <textarea id="intelThesis" rows="3" placeholder="Uraikan hipotesis atau dampak likuiditas terhadap BTC..." class="w-full px-3 py-2 rounded bg-[#0B0E14] border border-white/[0.08] text-white focus:outline-none focus:border-purple-500"></textarea>
+          </div>
+          <div>
+            <label class="block text-zinc-400 font-semibold mb-1">Tautan Sumber Verifiable (Opsional)</label>
+            <input id="intelUrl" type="url" placeholder="https://..." class="w-full px-3 py-2 rounded bg-[#0B0E14] border border-white/[0.08] text-white focus:outline-none focus:border-purple-500" />
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-zinc-400 font-semibold mb-1">Pilar Klasifikasi</label>
+              <select id="intelPillar" class="w-full px-3 py-2 rounded bg-[#0B0E14] border border-white/[0.08] text-white focus:outline-none focus:border-purple-500">
+                <option value="USER_THESIS">USER_THESIS</option>
+                <option value="MACRO_LIQUIDITY">MACRO_LIQUIDITY</option>
+                <option value="REGULATORY">REGULATORY</option>
+                <option value="SECURITY_EXPLOIT">SECURITY_EXPLOIT</option>
+                <option value="INSTITUTIONAL">INSTITUTIONAL</option>
+                <option value="GEOPOLITICAL">GEOPOLITICAL</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-zinc-400 font-semibold mb-1">Tingkat Keyakinan (0.0 - 1.0)</label>
+              <input id="intelConfidence" type="number" step="0.05" min="0" max="1" value="0.80" class="w-full px-3 py-2 rounded bg-[#0B0E14] border border-white/[0.08] text-white tabular focus:outline-none focus:border-purple-500" />
+            </div>
+          </div>
+          <div>
+            <label class="block text-zinc-400 font-semibold mb-1">Sentimen Bias: <span id="intelSentimentVal" class="text-purple-400 font-mono font-bold">+0.50</span></label>
+            <input id="intelSentiment" type="range" min="-1" max="1" step="0.05" value="0.5" oninput="document.getElementById('intelSentimentVal').innerText = (this.value >= 0 ? '+' : '') + Number(this.value).toFixed(2)" class="w-full" />
+            <div class="flex justify-between text-[10px] text-zinc-500">
+              <span>-1.0 (Sangat Bearish)</span>
+              <span>0.0 (Netral)</span>
+              <span>+1.0 (Sangat Bullish)</span>
+            </div>
+          </div>
+          <div>
+            <label class="block text-zinc-400 font-semibold mb-1">Tags (Pisahkan koma)</label>
+            <input id="intelTags" type="text" placeholder="fed, qt, liquidity" class="w-full px-3 py-2 rounded bg-[#0B0E14] border border-white/[0.08] text-white focus:outline-none focus:border-purple-500" />
+          </div>
+        </div>
+        <div id="intelFormStatus" class="text-xs text-rose-400 hidden"></div>
+        <div class="flex items-center justify-end gap-3 pt-3 border-t border-white/[0.08]">
+          <button onclick="toggleIntelModal(false)" class="px-4 py-2 rounded bg-zinc-800 text-zinc-300 hover:text-white text-xs font-semibold">Batal</button>
+          <button onclick="submitUserIntelligence()" class="px-4 py-2 rounded bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold">Simpan & Injeksi Alpha</button>
+        </div>
+      </div>
+    </div>
+
 
   <!-- ========================================== -->
   <!-- FOOTER (BERSIH & PROFESSIONAL) -->
@@ -1791,9 +1999,11 @@
       const marketView = document.getElementById('marketView');
       const portfolioView = document.getElementById('portfolioView');
       const macroView = document.getElementById('macroView');
+      const committeeView = document.getElementById('committeeView');
       const tabMarketBtn = document.getElementById('tabMarketBtn');
       const tabPortfolioBtn = document.getElementById('tabPortfolioBtn');
       const tabMacroBtn = document.getElementById('tabMacroBtn');
+      const tabCommitteeBtn = document.getElementById('tabCommitteeBtn');
 
       const activeClass = 'flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-amber-500 text-zinc-950 shadow-sm transition-all';
       const inactiveClass = 'flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all';
@@ -1801,10 +2011,12 @@
       marketView.classList.add('hidden');
       portfolioView.classList.add('hidden');
       if (macroView) macroView.classList.add('hidden');
+      if (committeeView) committeeView.classList.add('hidden');
 
       tabMarketBtn.className = inactiveClass;
       tabPortfolioBtn.className = inactiveClass;
       if (tabMacroBtn) tabMacroBtn.className = inactiveClass;
+      if (tabCommitteeBtn) tabCommitteeBtn.className = inactiveClass;
 
       if (tab === 'market') {
         marketView.classList.remove('hidden');
@@ -1817,6 +2029,263 @@
         if (macroView) macroView.classList.remove('hidden');
         if (tabMacroBtn) tabMacroBtn.className = activeClass;
         loadMacroData();
+      } else if (tab === 'committee') {
+        if (committeeView) committeeView.classList.remove('hidden');
+        if (tabCommitteeBtn) tabCommitteeBtn.className = activeClass;
+        loadCommitteeData();
+      }
+    }
+
+    function toggleIntelModal(show) {
+      const m = document.getElementById('intelModal');
+      if (m) {
+        if (show) m.classList.remove('hidden');
+        else m.classList.add('hidden');
+      }
+    }
+
+    async function loadCommitteeData() {
+      await Promise.all([
+        fetchCommitteeLatest(),
+        fetchUserIntelligenceList(),
+        fetchPipelineSchedule(),
+      ]);
+    }
+
+    async function fetchCommitteeLatest() {
+      try {
+        const resp = await fetch('/api/committee/latest');
+        if (!resp.ok) return;
+        const memo = await resp.json();
+        if (!memo) return;
+
+        // Render Hero
+        const dateEl = document.getElementById('commMemoDate');
+        if (dateEl) dateEl.innerText = memo.memo_date || 'N/A';
+        const regimeEl = document.getElementById('commRegimeBadge');
+        if (regimeEl) regimeEl.innerText = memo.market_regime || 'NEUTRAL_CHOP';
+        const scoreEl = document.getElementById('commConsensusScore');
+        if (scoreEl) scoreEl.innerText = (memo.consensus_score >= 0 ? '+' : '') + Number(memo.consensus_score || 0).toFixed(2);
+        const actionEl = document.getElementById('commActionBadge');
+        if (actionEl) actionEl.innerText = memo.proposed_action || 'STANDARD_DCA';
+        const sumEl = document.getElementById('commExecutiveSummary');
+        if (sumEl) sumEl.innerText = memo.executive_summary_id || 'Belum ada memorandum tersimpan.';
+
+        // Neural vs Symbolic
+        const neuralEl = document.getElementById('commNeuralAlloc');
+        if (neuralEl) neuralEl.innerText = '$' + Number(memo.proposed_allocation_usd || 0).toFixed(2);
+        const execEl = document.getElementById('commExecutedAlloc');
+        if (execEl) execEl.innerText = '$' + Number(memo.clamped_allocation_usd || 0).toFixed(2);
+        const clampedBadge = document.getElementById('commClampedBadge');
+        if (clampedBadge) {
+          clampedBadge.innerText = memo.allocation_clamped ? 'CLAMPED' : 'PASSED';
+          clampedBadge.className = memo.allocation_clamped
+            ? 'px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30'
+            : 'px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+        }
+        const reasonEl = document.getElementById('commClampingReason');
+        if (reasonEl) reasonEl.innerText = memo.clamping_reason || 'Semua invariant simbolik terpenuhi.';
+
+        // Personas
+        const personaGrid = document.getElementById('personaCardsGrid');
+        if (personaGrid && Array.isArray(memo.votes)) {
+          personaGrid.innerHTML = memo.votes.map(v => {
+            const pTitle = (v.persona || '').replace('_', ' ');
+            const stanceClass = (v.stance === 'BULLISH' || v.stance === 'MODERATELY_BULLISH')
+              ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+              : ((v.stance === 'DEFENSIVE' || v.stance === 'CRISIS')
+                ? 'text-rose-400 bg-rose-500/10 border-rose-500/20'
+                : 'text-zinc-300 bg-zinc-800/40 border-white/[0.06]');
+            return `
+              <div class="p-4 rounded-xl bg-[#0F1218] border border-white/[0.07] space-y-3">
+                <div class="flex items-center justify-between pb-2 border-b border-white/[0.05]">
+                  <div class="font-bold text-white text-xs uppercase tracking-wide">${pTitle}</div>
+                  <span class="px-2 py-0.5 rounded text-[10px] font-semibold border ${stanceClass}">${v.stance}</span>
+                </div>
+                <div class="flex items-baseline justify-between tabular">
+                  <span class="text-[11px] text-zinc-400">Target Alokasi:</span>
+                  <span class="font-mono font-bold text-white text-sm">$${Number(v.target_allocation_usd || 0).toFixed(2)}</span>
+                </div>
+                <div class="space-y-1">
+                  <div class="flex justify-between text-[10px] text-zinc-400">
+                    <span>Keyakinan (Confidence)</span>
+                    <span class="font-mono font-bold text-purple-400">${Math.round((v.confidence || 0) * 100)}%</span>
+                  </div>
+                  <div class="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                    <div class="bg-purple-500 h-1.5 rounded-full" style="width: ${Math.round((v.confidence || 0) * 100)}%"></div>
+                  </div>
+                </div>
+                <p class="text-[11px] text-zinc-300 leading-relaxed pt-1 border-t border-white/[0.04]">${v.rationale || ''}</p>
+              </div>
+            `;
+          }).join('');
+        }
+
+        // Invariants
+        const invBody = document.getElementById('invariantsTableBody');
+        if (invBody && Array.isArray(memo.invariants_checked)) {
+          invBody.innerHTML = memo.invariants_checked.map(inv => {
+            const isOk = inv.status === 'PASSED';
+            const badgeClass = isOk
+              ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+              : (inv.status === 'CLAMPED'
+                ? 'text-amber-400 bg-amber-500/10 border-amber-500/20'
+                : 'text-rose-400 bg-rose-500/10 border-rose-500/20');
+            return `
+              <tr class="hover:bg-white/[0.02]">
+                <td class="py-2.5 px-3 font-semibold text-white">${inv.name}</td>
+                <td class="py-2.5 px-3 text-zinc-400 font-mono text-[11px]">${inv.name === 'Daily 15% Reserve Cap' ? 'Max 15% Pool / 24h' : (inv.name === 'Macro 2h Proximity Buffer' ? '±120 min rilis High-Impact' : (inv.name === 'Max Drawdown Limit (<25%)' ? 'MDD <= 25%' : 'Mathematically Checked'))}</td>
+                <td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded text-[10px] font-bold border ${badgeClass}">${inv.status}</span></td>
+                <td class="py-2.5 px-3 text-zinc-400 text-[11px]">${inv.detail || (isOk ? 'Memenuhi invariant batas risiko' : 'Batas terpicu')}</td>
+              </tr>
+            `;
+          }).join('');
+        }
+      } catch (err) {
+        console.warn("Failed fetching committee latest:", err);
+      }
+    }
+
+    async function fetchUserIntelligenceList() {
+      try {
+        const resp = await fetch('/api/intelligence/list?limit=20');
+        if (!resp.ok) return;
+        const items = await resp.json();
+        const tbody = document.getElementById('intelligenceBlotterBody');
+        if (!tbody) return;
+
+        if (!Array.isArray(items) || items.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="5" class="py-4 text-center text-zinc-500">Belum ada user intelligence tersimpan. Klik "Ingest Intelligence" untuk menambahkan.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = items.map(it => {
+          const sent = Number(it.sentiment_bias || 0.0);
+          const sentClass = sent > 0 ? 'text-emerald-400' : (sent < 0 ? 'text-rose-400' : 'text-zinc-400');
+          const sentStr = (sent >= 0 ? '+' : '') + sent.toFixed(2);
+          const confStr = Math.round(Number(it.confidence_score || 0.8) * 100) + '%';
+          const link = it.source_url
+            ? `<a href="${it.source_url}" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:underline inline-flex items-center gap-1 font-mono text-[11px]">Buka Tautan ↗</a>`
+            : `<span class="text-zinc-500 font-mono text-[11px]">-</span>`;
+
+          return `
+            <tr class="hover:bg-white/[0.02]">
+              <td class="py-2.5 px-3 font-mono text-[11px] text-zinc-400">
+                <div class="text-white font-semibold">${it.intelligence_id || ''}</div>
+                <div class="text-[10px]">${(it.created_at_utc || '').substring(0, 16).replace('T', ' ')}</div>
+              </td>
+              <td class="py-2.5 px-3">
+                <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20">${it.pillar || 'USER_THESIS'}</span>
+              </td>
+              <td class="py-2.5 px-3 space-y-0.5">
+                <div class="font-semibold text-white text-xs">${it.title || 'Note'}</div>
+                <div class="text-zinc-400 text-[11px] line-clamp-2">${it.user_thesis || ''}</div>
+              </td>
+              <td class="py-2.5 px-3 font-mono text-[11px]">
+                <div class="${sentClass} font-bold">${sentStr}</div>
+                <div class="text-[10px] text-zinc-400">Conf: ${confStr}</div>
+              </td>
+              <td class="py-2.5 px-3 text-right">${link}</td>
+            </tr>
+          `;
+        }).join('');
+      } catch (err) {
+        console.warn("Failed fetching intelligence list:", err);
+      }
+    }
+
+    async function fetchPipelineSchedule() {
+      try {
+        const resp = await fetch('/api/pipeline/schedule');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const container = document.getElementById('pipelineCadenceCards');
+        if (!container || !data || !data.cadences) return;
+
+        const cadences = [
+          { key: 'hourly', title: 'Hourly Pipeline (*:05 UTC)', icon: '⏱️', desc: data.cadences.hourly?.description || '' },
+          { key: 'daily', title: 'Daily Pipeline (00:05 UTC)', icon: '📅', desc: data.cadences.daily?.description || '' },
+          { key: 'weekly', title: 'Weekly Pipeline (Mon 01:00 UTC)', icon: '📊', desc: data.cadences.weekly?.description || '' },
+        ];
+
+        container.innerHTML = cadences.map(c => {
+          const lockInfo = data.locks?.[c.key] || {};
+          const isLocked = Boolean(lockInfo.locked);
+          const statusText = isLocked ? 'AKTIF BERJALAN' : 'STANDBY IDLE';
+          const badgeClass = isLocked ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
+          return `
+            <div class="p-4 rounded-xl bg-[#12151E] border border-white/[0.06] space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-sm font-bold text-white flex items-center gap-1.5"><span>${c.icon}</span> ${c.title}</span>
+                <span class="px-2 py-0.5 rounded text-[10px] font-bold border ${badgeClass}">${statusText}</span>
+              </div>
+              <p class="text-[11px] text-zinc-400 leading-relaxed">${c.desc}</p>
+              <div class="pt-2 border-t border-white/[0.05] text-[10px] font-mono text-zinc-500">
+                Lock: ${isLocked ? 'PID ' + lockInfo.active_pid : 'Idle'}
+              </div>
+            </div>
+          `;
+        }).join('');
+      } catch (err) {
+        console.warn("Failed fetching pipeline schedule:", err);
+      }
+    }
+
+    async function submitUserIntelligence() {
+      const title = document.getElementById('intelTitle').value.trim();
+      const thesis = document.getElementById('intelThesis').value.trim();
+      const url = document.getElementById('intelUrl').value.trim();
+      const pillar = document.getElementById('intelPillar').value;
+      const confidence = parseFloat(document.getElementById('intelConfidence').value) || 0.8;
+      const sentiment = parseFloat(document.getElementById('intelSentiment').value) || 0.0;
+      const tags = document.getElementById('intelTags').value.trim();
+      const statusEl = document.getElementById('intelFormStatus');
+
+      if (!thesis) {
+        if (statusEl) {
+          statusEl.innerText = "Tesis analitis wajib diisi.";
+          statusEl.classList.remove('hidden');
+        }
+        return;
+      }
+
+      try {
+        const resp = await fetch('/api/intelligence/ingest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: title || 'User Alpha Note',
+            user_thesis: thesis,
+            source_url: url || null,
+            pillar: pillar,
+            confidence_score: confidence,
+            sentiment_bias: sentiment,
+            tags: tags,
+          }),
+        });
+
+        if (!resp.ok) {
+          const errData = await resp.json();
+          if (statusEl) {
+            statusEl.innerText = "Gagal: " + (errData.message || "Error server");
+            statusEl.classList.remove('hidden');
+          }
+          return;
+        }
+
+        // Success
+        toggleIntelModal(false);
+        document.getElementById('intelTitle').value = '';
+        document.getElementById('intelThesis').value = '';
+        document.getElementById('intelUrl').value = '';
+        document.getElementById('intelTags').value = '';
+        if (statusEl) statusEl.classList.add('hidden');
+        await fetchUserIntelligenceList();
+      } catch (err) {
+        if (statusEl) {
+          statusEl.innerText = "Koneksi gagal: " + err;
+          statusEl.classList.remove('hidden');
+        }
       }
     }
 
