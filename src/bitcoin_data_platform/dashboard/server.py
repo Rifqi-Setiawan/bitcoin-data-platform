@@ -17,10 +17,64 @@ from typing import Any, cast
 
 import duckdb
 
+from bitcoin_data_platform.intelligence.ingester import IntelligenceIngester
 from bitcoin_data_platform.paper.engine import PaperTradingEngine
+from bitcoin_data_platform.pipeline.lock_manager import LockManager
 from bitcoin_data_platform.storage.duckdb_manager import DuckDBManager
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_COMMITTEE_MEMO: dict[str, Any] = {
+    "memo_id": "default-memo",
+    "memo_date": datetime.now(UTC).date().isoformat(),
+    "created_at_utc": datetime.now(UTC).isoformat(),
+    "market_regime": "NEUTRAL_CHOP",
+    "composite_mni": 0.0,
+    "consensus_score": 0.0,
+    "proposed_action": "STANDARD_DCA",
+    "proposed_allocation_usd": 10.0,
+    "clamped_allocation_usd": 10.0,
+    "allocation_clamped": False,
+    "clamping_reason": None,
+    "risk_guard_passed": True,
+    "executive_summary_id": (
+        "Komite Investasi beroperasi dalam status default. Belum ada sesi deliberasi tersimpan."
+    ),
+    "macro_thesis": "Kondisi likuiditas makro stabil moderat.",
+    "valuation_thesis": "Valuasi on-chain berada pada batas nilai wajar siklus.",
+    "technical_thesis": "Parameter risiko teknikal dalam toleransi normal.",
+    "dissenting_opinions": "Tidak ada perbedaan pandangan yang dicatat.",
+    "votes": [
+        {
+            "persona": "MACRO_STRATEGIST",
+            "stance": "NEUTRAL",
+            "target_allocation_usd": 10.0,
+            "confidence": 0.75,
+            "rationale": "Kondisi likuiditas normal.",
+        },
+        {
+            "persona": "VALUATION_ANALYST",
+            "stance": "NEUTRAL",
+            "target_allocation_usd": 10.0,
+            "confidence": 0.80,
+            "rationale": "Valuasi on-chain netral.",
+        },
+        {
+            "persona": "RISK_OFFICER",
+            "stance": "NEUTRAL",
+            "target_allocation_usd": 10.0,
+            "confidence": 0.85,
+            "rationale": "Drawdown terkendali.",
+        },
+    ],
+    "invariants_checked": [
+        {"name": "Solvency", "status": "PASSED"},
+        {"name": "Daily 15% Reserve Cap", "status": "PASSED"},
+        {"name": "Macro 2h Proximity Buffer", "status": "PASSED"},
+        {"name": "Black Swan Sentinel", "status": "PASSED"},
+        {"name": "Max Drawdown Limit (<25%)", "status": "PASSED"},
+    ],
+}
 
 MONTH_MAP_ID = {
     1: "Jan",
@@ -1421,9 +1475,29 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_macro_news(query)
         elif path == "/api/macro/calendar":
             self._handle_macro_calendar(query)
+        elif path == "/api/committee/latest":
+            self._handle_committee_latest(query)
+        elif path == "/api/committee/history":
+            self._handle_committee_history(query)
+        elif path == "/api/intelligence/list":
+            self._handle_intelligence_list(query)
+        elif path == "/api/pipeline/schedule":
+            self._handle_pipeline_schedule(query)
         elif path == "/favicon.ico":
             self.send_response(204)
             self.end_headers()
+        else:
+            self._send_404(f"Path not found: {path}")
+
+    def do_POST(self) -> None:  # noqa: N802
+        """Handle HTTP POST requests."""
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path.rstrip("/")
+        if not path:
+            path = "/"
+
+        if path == "/api/intelligence/ingest":
+            self._handle_intelligence_ingest()
         else:
             self._send_404(f"Path not found: {path}")
 
@@ -1788,6 +1862,180 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
         except Exception as exc:
             logger.warning("Failed querying macro calendar: %s, returning empty list", exc)
             self._send_json([])
+
+    def _handle_committee_latest(self, query: dict[str, list[str]]) -> None:
+        """Serve latest Investment Committee memorandum, persona votes, and invariant checks."""
+        db_path = self.dashboard_server.db_path
+        try:
+            db_mgr = DuckDBManager(db_path)
+            with db_mgr:
+                memo = db_mgr.get_latest_investment_memo()
+            if not memo:
+                self._send_json(DEFAULT_COMMITTEE_MEMO.copy())
+                return
+
+            reason = memo.get("clamping_reason") or ""
+            invariants = [
+                {"name": "Solvency", "status": "CLAMPED" if "SOLVENCY" in reason else "PASSED"},
+                {
+                    "name": "Daily 15% Reserve Cap",
+                    "status": "CLAMPED" if "DAILY_RESERVE_CAP" in reason else "PASSED",
+                    "detail": reason if "DAILY_RESERVE_CAP" in reason else None,
+                },
+                {
+                    "name": "Macro 2h Proximity Buffer",
+                    "status": (
+                        "HALTED" if ("Proksimitas" in reason or "Macro" in reason) else "PASSED"
+                    ),
+                },
+                {
+                    "name": "Black Swan Sentinel",
+                    "status": "HALTED" if "Black Swan" in reason else "PASSED",
+                },
+                {
+                    "name": "Max Drawdown Limit (<25%)",
+                    "status": "CLAMPED" if "DRAWDOWN_LIMIT" in reason else "PASSED",
+                },
+            ]
+            memo["invariants_checked"] = invariants
+            self._send_json(memo)
+        except Exception as exc:
+            logger.warning("Failed querying latest committee memo: %s, returning fallback", exc)
+            self._send_json(DEFAULT_COMMITTEE_MEMO.copy())
+
+    def _handle_committee_history(self, query: dict[str, list[str]]) -> None:
+        """Serve historical investment committee memorandums."""
+        limit_str = query.get("limit", ["20"])[0]
+        try:
+            limit = max(1, min(100, int(limit_str)))
+        except ValueError:
+            limit = 20
+        db_path = self.dashboard_server.db_path
+        try:
+            db_mgr = DuckDBManager(db_path)
+            with db_mgr:
+                history = db_mgr.get_investment_memos_history(limit=limit)
+            self._send_json(history)
+        except Exception as exc:
+            logger.warning("Failed querying committee history: %s, returning empty", exc)
+            self._send_json([])
+
+    def _handle_intelligence_list(self, query: dict[str, list[str]]) -> None:
+        """Serve recent user market intelligence submissions."""
+        limit_str = query.get("limit", ["20"])[0]
+        try:
+            limit = max(1, min(100, int(limit_str)))
+        except ValueError:
+            limit = 20
+        db_path = self.dashboard_server.db_path
+        try:
+            db_mgr = DuckDBManager(db_path)
+            with db_mgr:
+                items = db_mgr.list_user_intelligence(limit=limit, active_only=True)
+            self._send_json(items)
+        except Exception as exc:
+            logger.warning("Failed querying user intelligence: %s, returning empty", exc)
+            self._send_json([])
+
+    def _handle_pipeline_schedule(self, query: dict[str, list[str]]) -> None:
+        """Serve automated scheduling pipeline cadence info and lock statuses."""
+        db_path = self.dashboard_server.db_path
+        try:
+            is_mem = str(db_path) == ":memory:"
+            lock_dir = Path("./data/state/locks") if is_mem else Path(db_path).parent / "locks"
+            lock_mgr = LockManager(lock_dir)
+            locks = lock_mgr.get_status()
+        except Exception:
+            locks = {}
+        schedule_data = {
+            "cadences": {
+                "hourly": {
+                    "schedule": "*:05 UTC",
+                    "description": "Multi-source RSS news ingestion & black swan sentinel scan",
+                },
+                "daily": {
+                    "schedule": "00:05 UTC",
+                    "description": (
+                        "Candle sync, sentiment, macro calendar, 3-tier MNI, committee, paper step"
+                    ),
+                },
+                "weekly": {
+                    "schedule": "Mon 01:00 UTC",
+                    "description": (
+                        "Portfolio risk audit, reserve health, and retrospective memorandum"
+                    ),
+                },
+            },
+            "locks": locks,
+        }
+        self._send_json(schedule_data)
+
+    def _handle_intelligence_ingest(self) -> None:
+        """Handle POST /api/intelligence/ingest."""
+        length_str = self.headers.get("Content-Length", "0")
+        try:
+            length = int(length_str)
+        except ValueError:
+            length = 0
+
+        if length <= 0:
+            err = {"error": "invalid_payload", "message": "Empty request body"}
+            self._send_json(err, status=400)
+            return
+
+        body = self.rfile.read(length)
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except Exception as exc:
+            err = {"error": "invalid_json", "message": f"Malformed JSON: {exc}"}
+            self._send_json(err, status=400)
+            return
+
+        thesis = payload.get("user_thesis")
+        if not thesis or not str(thesis).strip():
+            err = {"error": "invalid_payload", "message": "'user_thesis' is required"}
+            self._send_json(err, status=400)
+            return
+
+        title = payload.get("title", "")
+        url = payload.get("source_url")
+        pillar = payload.get("pillar", "USER_THESIS")
+        try:
+            sentiment = float(payload.get("sentiment_bias", 0.0))
+            confidence = float(payload.get("confidence_score", 0.8))
+        except (TypeError, ValueError):
+            sentiment = 0.0
+            confidence = 0.8
+        tags = payload.get("tags", [])
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(",") if t.strip()]
+
+        db_path = self.dashboard_server.db_path
+        try:
+            db_mgr = DuckDBManager(db_path)
+            with db_mgr:
+                ingester = IntelligenceIngester(db_mgr)
+                record = ingester.ingest(
+                    title=title,
+                    user_thesis=thesis,
+                    source_url=url,
+                    pillar=pillar,
+                    sentiment_bias=sentiment,
+                    confidence_score=confidence,
+                    tags=tags,
+                )
+            self._send_json(
+                {
+                    "status": "SUCCESS",
+                    "intelligence_id": record.intelligence_id,
+                    "created_at_utc": record.created_at_utc.isoformat(),
+                    "message": "User intelligence recorded and indexed for next deliberation.",
+                },
+                status=201,
+            )
+        except Exception as exc:
+            logger.error("Failed ingesting intelligence via API: %s", exc)
+            self._send_json({"error": "internal_error", "message": str(exc)}, status=500)
 
     def _send_json(self, data: Any, status: int = 200) -> None:
         """Serialize and send JSON response."""

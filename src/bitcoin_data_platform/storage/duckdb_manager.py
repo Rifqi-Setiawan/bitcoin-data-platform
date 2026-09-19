@@ -10,6 +10,12 @@ from typing import Any, cast
 
 import duckdb
 
+from bitcoin_data_platform.committee.models import (
+    InvestmentMemorandum,
+)
+from bitcoin_data_platform.intelligence.models import (
+    UserIntelligenceRecord,
+)
 from bitcoin_data_platform.macro.models import (
     DailyNarrativeReport,
     MacroArticle,
@@ -1256,6 +1262,362 @@ class DuckDBManager:
             result.append(d)
         return result
 
+    def create_committee_tables(self) -> None:
+        """Create tables for Phase 17 Investment Committee and User Intelligence."""
+        con = self.get_connection()
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_market_intelligence (
+                intelligence_id VARCHAR PRIMARY KEY,
+                source_url VARCHAR,
+                title VARCHAR NOT NULL,
+                user_thesis VARCHAR NOT NULL,
+                raw_content VARCHAR NOT NULL DEFAULT '',
+                pillar VARCHAR NOT NULL,
+                sentiment_bias DOUBLE NOT NULL,
+                confidence_score DOUBLE NOT NULL,
+                tags VARCHAR NOT NULL DEFAULT '',
+                created_at_utc TIMESTAMPTZ NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE
+            );
+
+            CREATE TABLE IF NOT EXISTS investment_committee_memos (
+                memo_id VARCHAR PRIMARY KEY,
+                memo_date DATE NOT NULL,
+                created_at_utc TIMESTAMPTZ NOT NULL,
+                market_regime VARCHAR NOT NULL,
+                composite_mni DOUBLE NOT NULL,
+                consensus_score DOUBLE NOT NULL,
+                executive_summary_id VARCHAR NOT NULL,
+                macro_thesis VARCHAR NOT NULL,
+                valuation_thesis VARCHAR NOT NULL,
+                technical_thesis VARCHAR NOT NULL,
+                dissenting_opinions VARCHAR NOT NULL,
+                proposed_action VARCHAR NOT NULL,
+                proposed_allocation_usd DOUBLE NOT NULL,
+                clamped_allocation_usd DOUBLE NOT NULL,
+                allocation_clamped BOOLEAN NOT NULL,
+                clamping_reason VARCHAR,
+                risk_guard_passed BOOLEAN NOT NULL,
+                memo_markdown VARCHAR NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS investment_committee_votes (
+                vote_id VARCHAR PRIMARY KEY,
+                memo_id VARCHAR NOT NULL,
+                persona VARCHAR NOT NULL,
+                stance VARCHAR NOT NULL,
+                target_allocation_usd DOUBLE NOT NULL,
+                confidence DOUBLE NOT NULL,
+                rationale VARCHAR NOT NULL,
+                voted_at_utc TIMESTAMPTZ NOT NULL
+            );
+            """
+        )
+
+    def create_committee_mart_view(self) -> None:
+        """Create or replace analytical view mart_committee_deliberation_daily."""
+        con = self.get_connection()
+        self.create_committee_tables()
+        with contextlib.suppress(Exception):
+            self.create_macro_mart_view()
+
+        con.execute(
+            """
+            CREATE OR REPLACE VIEW mart_committee_deliberation_daily AS
+            SELECT
+                m.trade_date_utc,
+                m.market_close_usd,
+                m.sma_200,
+                m.mayer_multiple,
+                m.mvrv_ratio,
+                m.fng_value,
+                m.composite_mni,
+                m.macro_regime,
+                m.black_swan_flag,
+                c.memo_id,
+                c.consensus_score,
+                c.proposed_action,
+                c.proposed_allocation_usd,
+                c.clamped_allocation_usd,
+                c.allocation_clamped,
+                c.clamping_reason,
+                c.risk_guard_passed,
+                c.executive_summary_id,
+                COALESCE(u.active_user_alpha_count, 0) AS active_user_alpha_count
+            FROM mart_macro_narrative_daily m
+            LEFT JOIN investment_committee_memos c
+                ON CAST(m.trade_date_utc AS DATE) = c.memo_date
+            LEFT JOIN (
+                SELECT
+                    CAST(created_at_utc AS DATE) AS alpha_date,
+                    COUNT(*) AS active_user_alpha_count
+                FROM user_market_intelligence
+                WHERE is_active = TRUE
+                GROUP BY CAST(created_at_utc AS DATE)
+            ) u ON CAST(m.trade_date_utc AS DATE) = u.alpha_date;
+            """
+        )
+
+    def insert_user_intelligence(self, record: UserIntelligenceRecord) -> None:
+        """Insert or replace a user market intelligence record."""
+        con = self.get_connection()
+        self.create_committee_tables()
+        tags_str = ", ".join(record.tags) if isinstance(record.tags, list) else str(record.tags)
+        con.execute(
+            """
+            INSERT INTO user_market_intelligence (
+                intelligence_id, source_url, title, user_thesis, raw_content,
+                pillar, sentiment_bias, confidence_score, tags, created_at_utc, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (intelligence_id) DO UPDATE SET
+                title = EXCLUDED.title,
+                user_thesis = EXCLUDED.user_thesis,
+                raw_content = EXCLUDED.raw_content,
+                pillar = EXCLUDED.pillar,
+                sentiment_bias = EXCLUDED.sentiment_bias,
+                confidence_score = EXCLUDED.confidence_score,
+                tags = EXCLUDED.tags,
+                is_active = EXCLUDED.is_active;
+            """,
+            [
+                record.intelligence_id,
+                record.source_url,
+                record.title,
+                record.user_thesis,
+                record.raw_content,
+                record.pillar.value if hasattr(record.pillar, "value") else str(record.pillar),
+                float(record.sentiment_bias),
+                float(record.confidence_score),
+                tags_str,
+                record.created_at_utc,
+                bool(record.is_active),
+            ],
+        )
+
+    def list_user_intelligence(
+        self, limit: int = 20, active_only: bool = True
+    ) -> list[dict[str, Any]]:
+        """List recent user market intelligence records."""
+        con = self.get_connection()
+        self.create_committee_tables()
+        where_clause = "WHERE is_active = TRUE" if active_only else ""
+        cursor = con.execute(
+            f"""
+            SELECT
+                intelligence_id, source_url, title, user_thesis, raw_content,
+                pillar, sentiment_bias, confidence_score, tags,
+                CAST(created_at_utc AS VARCHAR) AS created_at_utc, is_active
+            FROM user_market_intelligence
+            {where_clause}
+            ORDER BY created_at_utc DESC
+            LIMIT ?;
+            """,
+            [limit],
+        )
+        rows = cursor.fetchall()
+        cols = [desc[0] for desc in cursor.description]
+        results: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(zip(cols, r, strict=True))
+            tag_str = d.get("tags") or ""
+            d["tags"] = [t.strip() for t in tag_str.split(",") if t.strip()] if tag_str else []
+            results.append(d)
+        return results
+
+    def get_user_intelligence_window(
+        self, start_date: date, end_date: date
+    ) -> list[dict[str, Any]]:
+        """Get active user intelligence records created within date window."""
+        con = self.get_connection()
+        self.create_committee_tables()
+        cursor = con.execute(
+            """
+            SELECT
+                intelligence_id, source_url, title, user_thesis, raw_content,
+                pillar, sentiment_bias, confidence_score, tags,
+                CAST(created_at_utc AS VARCHAR) AS created_at_utc, is_active
+            FROM user_market_intelligence
+            WHERE is_active = TRUE
+              AND CAST(created_at_utc AS DATE) >= ?
+              AND CAST(created_at_utc AS DATE) <= ?
+            ORDER BY created_at_utc ASC;
+            """,
+            [start_date, end_date],
+        )
+        rows = cursor.fetchall()
+        cols = [desc[0] for desc in cursor.description]
+        results: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(zip(cols, r, strict=True))
+            tag_str = d.get("tags") or ""
+            d["tags"] = [t.strip() for t in tag_str.split(",") if t.strip()] if tag_str else []
+            results.append(d)
+        return results
+
+    def insert_investment_memo(self, memo: InvestmentMemorandum) -> None:
+        """Insert or replace an investment committee memorandum and member votes."""
+        con = self.get_connection()
+        self.create_committee_tables()
+
+        con.execute(
+            """
+            INSERT OR REPLACE INTO investment_committee_memos (
+                memo_id, memo_date, created_at_utc, market_regime, composite_mni,
+                consensus_score, executive_summary_id, macro_thesis, valuation_thesis,
+                technical_thesis, dissenting_opinions, proposed_action,
+                proposed_allocation_usd, clamped_allocation_usd, allocation_clamped,
+                clamping_reason, risk_guard_passed, memo_markdown
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            [
+                memo.memo_id,
+                memo.memo_date,
+                memo.created_at_utc,
+                memo.market_regime,
+                float(memo.composite_mni),
+                float(memo.consensus_score),
+                memo.executive_summary_id,
+                memo.macro_thesis,
+                memo.valuation_thesis,
+                memo.technical_thesis,
+                memo.dissenting_opinions,
+                memo.proposed_action.value
+                if hasattr(memo.proposed_action, "value")
+                else str(memo.proposed_action),
+                float(memo.proposed_allocation_usd),
+                float(memo.clamped_allocation_usd),
+                bool(memo.allocation_clamped),
+                memo.clamping_reason,
+                bool(memo.risk_guard_passed),
+                memo.memo_markdown,
+            ],
+        )
+
+        for v in memo.votes:
+            con.execute(
+                """
+                INSERT OR REPLACE INTO investment_committee_votes (
+                    vote_id, memo_id, persona, stance, target_allocation_usd,
+                    confidence, rationale, voted_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                [
+                    v.vote_id,
+                    v.memo_id,
+                    v.persona.value if hasattr(v.persona, "value") else str(v.persona),
+                    v.stance.value if hasattr(v.stance, "value") else str(v.stance),
+                    float(v.target_allocation_usd),
+                    float(v.confidence),
+                    v.rationale,
+                    v.voted_at_utc,
+                ],
+            )
+
+    def get_votes_for_memo(self, memo_id: str) -> list[dict[str, Any]]:
+        """Fetch all individual votes cast for a given memorandum."""
+        con = self.get_connection()
+        self.create_committee_tables()
+        cursor = con.execute(
+            """
+            SELECT
+                vote_id, memo_id, persona, stance, target_allocation_usd,
+                confidence, rationale, CAST(voted_at_utc AS VARCHAR) AS voted_at_utc
+            FROM investment_committee_votes
+            WHERE memo_id = ?
+            ORDER BY vote_id ASC;
+            """,
+            [memo_id],
+        )
+        rows = cursor.fetchall()
+        cols = [desc[0] for desc in cursor.description]
+        return [dict(zip(cols, r, strict=True)) for r in rows]
+
+    def get_latest_investment_memo(self) -> dict[str, Any] | None:
+        """Fetch the latest investment committee memorandum with its votes."""
+        con = self.get_connection()
+        self.create_committee_tables()
+        cursor = con.execute(
+            """
+            SELECT
+                memo_id,
+                CAST(memo_date AS VARCHAR) AS memo_date,
+                CAST(created_at_utc AS VARCHAR) AS created_at_utc,
+                market_regime, composite_mni, consensus_score, executive_summary_id,
+                macro_thesis, valuation_thesis, technical_thesis, dissenting_opinions,
+                proposed_action, proposed_allocation_usd, clamped_allocation_usd,
+                allocation_clamped, clamping_reason, risk_guard_passed, memo_markdown
+            FROM investment_committee_memos
+            ORDER BY memo_date DESC, created_at_utc DESC
+            LIMIT 1;
+            """
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        cols = [desc[0] for desc in cursor.description]
+        data = dict(zip(cols, row, strict=True))
+        data["votes"] = self.get_votes_for_memo(data["memo_id"])
+        return data
+
+    def get_investment_memo_by_date(self, target_date: date) -> dict[str, Any] | None:
+        """Fetch investment committee memorandum for a target date."""
+        con = self.get_connection()
+        self.create_committee_tables()
+        cursor = con.execute(
+            """
+            SELECT
+                memo_id,
+                CAST(memo_date AS VARCHAR) AS memo_date,
+                CAST(created_at_utc AS VARCHAR) AS created_at_utc,
+                market_regime, composite_mni, consensus_score, executive_summary_id,
+                macro_thesis, valuation_thesis, technical_thesis, dissenting_opinions,
+                proposed_action, proposed_allocation_usd, clamped_allocation_usd,
+                allocation_clamped, clamping_reason, risk_guard_passed, memo_markdown
+            FROM investment_committee_memos
+            WHERE memo_date = ?
+            ORDER BY created_at_utc DESC
+            LIMIT 1;
+            """,
+            [target_date],
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        cols = [desc[0] for desc in cursor.description]
+        data = dict(zip(cols, row, strict=True))
+        data["votes"] = self.get_votes_for_memo(data["memo_id"])
+        return data
+
+    def get_investment_memos_history(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Fetch historical investment committee memorandums with votes."""
+        con = self.get_connection()
+        self.create_committee_tables()
+        cursor = con.execute(
+            """
+            SELECT
+                memo_id,
+                CAST(memo_date AS VARCHAR) AS memo_date,
+                CAST(created_at_utc AS VARCHAR) AS created_at_utc,
+                market_regime, composite_mni, consensus_score, executive_summary_id,
+                macro_thesis, valuation_thesis, technical_thesis, dissenting_opinions,
+                proposed_action, proposed_allocation_usd, clamped_allocation_usd,
+                allocation_clamped, clamping_reason, risk_guard_passed, memo_markdown
+            FROM investment_committee_memos
+            ORDER BY memo_date DESC, created_at_utc DESC
+            LIMIT ?;
+            """,
+            [limit],
+        )
+        rows = cursor.fetchall()
+        cols = [desc[0] for desc in cursor.description]
+        results: list[dict[str, Any]] = []
+        for r in rows:
+            data = dict(zip(cols, r, strict=True))
+            data["votes"] = self.get_votes_for_memo(data["memo_id"])
+            results.append(data)
+        return results
+
     def initialize(self) -> None:
         """Initialize database schema, tables, and views."""
         self.create_metadata_table()
@@ -1267,12 +1629,14 @@ class DuckDBManager:
         self.create_news_sentinel_alerts_table()
         self.create_paper_portfolio_tables()
         self.create_macro_tables()
+        self.create_committee_tables()
         self.create_hourly_view()
         self.create_daily_mart_view()
         self.create_network_fact_view()
         self.create_cross_domain_mart_view()
         self.create_investment_signals_view()
         self.create_macro_mart_view()
+        self.create_committee_mart_view()
 
     def record_run(
         self,
