@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import httpx
 
 from bitcoin_data_platform.paper.models import (
     PaperPortfolioBalance,
@@ -53,6 +54,16 @@ class PaperTradingEngine:
             con.execute("SET TimeZone='UTC';")
             return con
         except Exception as exc:
+            # Fallback to read_only=False if an active writer connection already exists
+            if read_only and "different configuration" in str(exc):
+                try:
+                    con = duckdb.connect(self.db_path_str, read_only=False)
+                    con.execute("SET TimeZone='UTC';")
+                    return con
+                except Exception as inner_exc:
+                    raise PaperEngineError(
+                        f"Failed connecting to DuckDB at {self.db_path_str}: {inner_exc}"
+                    ) from inner_exc
             raise PaperEngineError(
                 f"Failed connecting to DuckDB at {self.db_path_str}: {exc}"
             ) from exc
@@ -304,6 +315,24 @@ class PaperTradingEngine:
                 False,
                 "⚪ DCA STANDAR: Eksekusi harga manual (forced spot price).",
             )
+
+        # Fallback to live Coinbase spot ticker if daily analytical mart is not yet populated
+        try:
+            r = httpx.get(
+                "https://api.exchange.coinbase.com/products/BTC-USD/ticker",
+                headers={"User-Agent": "bitcoin-data-platform/0.1.0"},
+                timeout=5.0,
+            )
+            if r.status_code == 200:
+                spot = float(r.json()["price"])
+                return (
+                    spot,
+                    "STANDARD_DCA",
+                    False,
+                    f"⚪ DCA STANDAR: Eksekusi harga spot live Coinbase (${spot:,.2f}).",
+                )
+        except Exception as ticker_err:
+            logger.warning(f"Failed fetching live Coinbase ticker: {ticker_err}")
 
         raise ValueError(f"No market data or spot price available for trade date {trade_date}")
 
