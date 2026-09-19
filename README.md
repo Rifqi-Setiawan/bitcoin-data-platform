@@ -655,6 +655,9 @@ bitcoin-data dashboard \
 - `GET /api/portfolio`: Returns JSON consolidated summary metrics for forward paper trading.
 - `GET /api/portfolio/equity?limit=90`: Returns daily equity curve history comparing Dynamic Reserve DCA vs Buy & Hold benchmark.
 - `GET /api/portfolio/trades?limit=50`: Returns executed order blotter records from `paper_trade_ledger`.
+- `GET /api/macro/radar`: Returns latest synthesized Macro Radar metrics, Composite MNI gauge, 3-tier subscores, and regime.
+- `GET /api/macro/news?limit=20`: Returns curated multi-source news items with verified clickable original hyperlinks (`target="_blank"`).
+- `GET /api/macro/calendar?days=7`: Returns macroeconomic announcements with evaluated economic surprise deltas and liquidity directional biases.
 
 ### Forward Paper Trading Simulation (Phase 15)
 
@@ -678,6 +681,30 @@ bitcoin-data paper status --format json
 
 # 6. Reset portfolio to initial capital (requires explicit --force)
 bitcoin-data paper reset --initial-cash 1000.0 --force
+```
+
+### Macro & Narrative Intelligence Engine (Phase 16)
+
+A 3-tier institutional intelligence engine synthesizing Hard Macro surprises (ForexFactory CPI/NFP/FOMC), on-chain valuation sentiment (Fear & Greed, MVRV, Mayer Multiple), and 4-pillar narrative polarity (CoinDesk, Cointelegraph, Decrypt, Bitcoin Magazine) into a **Composite Macro-Narrative Index (MNI)** with 5-regime classification and automated AutoHedge-inspired `RiskGuard` circuit breakers.
+
+```bash
+# 1. Ingest and classify latest articles from curated RSS feeds
+bitcoin-data macro fetch-news
+
+# 2. Fetch high-impact macroeconomic calendar events and compute surprises
+bitcoin-data macro fetch-calendar
+
+# 3. Execute daily 3-tier synthesis and persist MNI report to DuckDB
+bitcoin-data macro synthesize
+
+# 4. Render terminal Macro Radar status and sentiment report
+bitcoin-data macro radar --format text
+
+# 5. Output Macro Radar state as JSON
+bitcoin-data macro radar --format json
+
+# 6. Check health and statistics of the macro intelligence pipeline
+bitcoin-data macro status
 ```
 
 ## Quality gates
@@ -722,6 +749,7 @@ make clean-dist # remove build and packaging artifacts
 - [Phase 13 Specification](docs/specs/PHASE_13_INVESTMENT_SIGNAL_ENGINE.md)
 - [Phase 14 Specification](docs/specs/PHASE_14_BACKTEST_VALIDATION.md)
 - [Phase 15 Specification](docs/specs/PHASE_15_FORWARD_PAPER_TRADING_DASHBOARD.md)
+- [Phase 16 Specification](docs/specs/PHASE_16_MACRO_NARRATIVE_INTELLIGENCE.md)
 - [Official Data Dictionary](docs/data_dictionary/DATA_DICTIONARY.md)
 - [ADR D-008: Container Evaluation](docs/decisions/D-008_CONTAINER_EVALUATION.md)
 - [ADR D-009: dbt-core Evaluation](docs/decisions/D-009_DBT_EVALUATION.md)

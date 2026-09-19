@@ -32,20 +32,12 @@ class RiskGuard:
         spot_price: float,
         macro_event: bool = False,
         reference_price: float | None = None,
+        *,
+        black_swan_flag: bool = False,
+        composite_mni: float = 0.0,
+        macro_event_proximity_minutes: int | None = None,
     ) -> RiskCheckResult:
-        """Validate proposed trade against institutional safety bounds.
-
-        Args:
-            portfolio: Current balance state of the portfolio.
-            side: 'BUY' or 'HOLD'.
-            gross_amount_usd: Total USD capital proposed for execution.
-            spot_price: Execution price for BTC.
-            macro_event: High-impact macro event flag for the trade date.
-            reference_price: Optional baseline price (e.g. previous close) for deviation checks.
-
-        Returns:
-            RiskCheckResult indicating allowed flag, reason, and context details.
-        """
+        """Validate proposed trade against institutional safety bounds."""
         # 1. Emergency Kill-Switch Check
         if self.is_kill_switch_active():
             return RiskCheckResult(
@@ -54,7 +46,40 @@ class RiskGuard:
                 details={"kill_switch_path": str(self.kill_switch_path)},
             )
 
-        # 2. Spot Price Sanity Checks
+        # 2. Black Swan Emergency Halt
+        if black_swan_flag:
+            return RiskCheckResult(
+                allowed=False,
+                reason=(
+                    "CIRCUIT_BREAKER_TRIPPED: Active Black Swan / "
+                    "Critical Regulatory Sentinel alert"
+                ),
+                details={"black_swan_flag": True},
+            )
+
+        # 3. Macro Proximity Buffer (+/- 120 minutes)
+        if macro_event_proximity_minutes is not None and abs(macro_event_proximity_minutes) <= 120:
+            return RiskCheckResult(
+                allowed=False,
+                reason=(
+                    f"CIRCUIT_BREAKER_TRIPPED: High-impact macro release window "
+                    f"(+/- 2h, current: {macro_event_proximity_minutes}m)"
+                ),
+                details={"macro_event_proximity_minutes": macro_event_proximity_minutes},
+            )
+
+        # 4. Severe Macro Contraction Halt
+        if composite_mni < -0.65:
+            return RiskCheckResult(
+                allowed=False,
+                reason=(
+                    f"CIRCUIT_BREAKER_TRIPPED: Severe Macro Liquidity Contraction "
+                    f"(MNI = {composite_mni:.2f})"
+                ),
+                details={"composite_mni": composite_mni},
+            )
+
+        # 5. Spot Price Sanity Checks
         if spot_price <= 0.0:
             return RiskCheckResult(
                 allowed=False,
@@ -79,7 +104,7 @@ class RiskGuard:
                     },
                 )
 
-        # 3. Macro Event Policy Check
+        # 6. Macro Event Policy Check
         if macro_event and self.reject_on_macro and side.upper() == "BUY":
             return RiskCheckResult(
                 allowed=False,
@@ -87,7 +112,7 @@ class RiskGuard:
                 details={"macro_event": True},
             )
 
-        # 4. Solvency Checks
+        # 7. Solvency Checks
         if side.upper() == "BUY":
             if gross_amount_usd < 0.0:
                 return RiskCheckResult(
@@ -118,5 +143,126 @@ class RiskGuard:
                 "side": side,
                 "gross_amount_usd": round(gross_amount_usd, 2),
                 "macro_event": macro_event,
+                "composite_mni": composite_mni,
+            },
+        )
+
+    def validate_pre_trade(
+        self,
+        *,
+        spot_price: float,
+        last_known_price: float = 0.0,
+        available_cash: float = 0.0,
+        required_cash: float = 0.0,
+        has_high_impact_macro_event: bool = False,
+        black_swan_flag: bool = False,
+        composite_mni: float = 0.0,
+        macro_event_proximity_minutes: int | None = None,
+    ) -> RiskCheckResult:
+        """Validate proposed pre-trade state against institutional bounds (AutoHedge style)."""
+        # 1. Emergency Kill-Switch Check
+        if self.is_kill_switch_active():
+            return RiskCheckResult(
+                allowed=False,
+                reason="Kill switch active",
+                details={"kill_switch_path": str(self.kill_switch_path)},
+            )
+
+        # 2. Black Swan Emergency Halt
+        if black_swan_flag:
+            return RiskCheckResult(
+                allowed=False,
+                reason=(
+                    "CIRCUIT_BREAKER_TRIPPED: Active Black Swan / "
+                    "Critical Regulatory Sentinel alert"
+                ),
+                details={"black_swan_flag": True},
+            )
+
+        # 3. Macro Proximity Buffer (+/- 120 minutes around High Impact announcement)
+        if macro_event_proximity_minutes is not None and abs(macro_event_proximity_minutes) <= 120:
+            return RiskCheckResult(
+                allowed=False,
+                reason=(
+                    f"CIRCUIT_BREAKER_TRIPPED: High-impact macro release window "
+                    f"(+/- 2h, current: {macro_event_proximity_minutes}m)"
+                ),
+                details={"macro_event_proximity_minutes": macro_event_proximity_minutes},
+            )
+
+        # 4. Severe Macro Contraction Halt
+        if composite_mni < -0.65:
+            return RiskCheckResult(
+                allowed=False,
+                reason=(
+                    f"CIRCUIT_BREAKER_TRIPPED: Severe Macro Liquidity Contraction "
+                    f"(MNI = {composite_mni:.2f})"
+                ),
+                details={"composite_mni": composite_mni},
+            )
+
+        # 5. Spot Price Sanity Checks
+        if spot_price <= 0.0:
+            return RiskCheckResult(
+                allowed=False,
+                reason=f"Invalid spot price: {spot_price}",
+                details={"spot_price": spot_price},
+            )
+
+        if last_known_price > 0.0:
+            deviation_pct = abs(spot_price - last_known_price) / last_known_price * 100.0
+            if deviation_pct > self.max_price_deviation_pct:
+                return RiskCheckResult(
+                    allowed=False,
+                    reason=(
+                        f"Price deviation exceeded: {deviation_pct:.2f}% > "
+                        f"{self.max_price_deviation_pct:.2f}%"
+                    ),
+                    details={
+                        "spot_price": spot_price,
+                        "reference_price": last_known_price,
+                        "deviation_pct": round(deviation_pct, 2),
+                        "max_allowed_pct": self.max_price_deviation_pct,
+                    },
+                )
+
+        # 6. Macro Event Policy Check
+        if has_high_impact_macro_event and self.reject_on_macro and required_cash > 0.0:
+            return RiskCheckResult(
+                allowed=False,
+                reason="High-impact macro event active (policy rejects buy orders)",
+                details={"has_high_impact_macro_event": True},
+            )
+
+        # 7. Solvency Checks
+        if required_cash < 0.0:
+            return RiskCheckResult(
+                allowed=False,
+                reason=f"Negative trade gross amount: {required_cash}",
+                details={"required_cash": required_cash},
+            )
+
+        if required_cash > available_cash + 1e-6:
+            return RiskCheckResult(
+                allowed=False,
+                reason=(
+                    f"Insufficient funds: gross ${required_cash:,.2f} "
+                    f"exceeds available cash ${available_cash:,.2f}"
+                ),
+                details={
+                    "gross_amount_usd": round(required_cash, 2),
+                    "available_cash": round(available_cash, 2),
+                },
+            )
+
+        return RiskCheckResult(
+            allowed=True,
+            reason="All risk checks passed",
+            details={
+                "spot_price": spot_price,
+                "composite_mni": composite_mni,
+                "black_swan_flag": black_swan_flag,
+                "required_cash": round(required_cash, 2),
+                "available_cash": round(available_cash, 2),
             },
         )

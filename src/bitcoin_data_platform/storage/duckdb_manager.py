@@ -1,14 +1,22 @@
 """DuckDB manager for curated analytical views, pipeline watermark, run locking, and metadata."""
 
+import contextlib
 import shutil
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
 import duckdb
 
+from bitcoin_data_platform.macro.models import (
+    DailyNarrativeReport,
+    MacroArticle,
+    MacroEconomicRelease,
+    MacroPillar,
+    MacroRegime,
+)
 from bitcoin_data_platform.sources.macro_calendar_contract import MacroEvent
 from bitcoin_data_platform.sources.sentiment_contract import SentimentRecord
 from bitcoin_data_platform.time_range import format_canonical_utc, parse_iso_utc
@@ -969,6 +977,285 @@ class DuckDBManager:
             """
         )
 
+    def create_macro_tables(self) -> None:
+        """Create tables for Phase 16 Macro & Narrative Intelligence."""
+        con = self.get_connection()
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS macro_news_articles (
+                article_id VARCHAR PRIMARY KEY,
+                source VARCHAR NOT NULL,
+                title VARCHAR NOT NULL,
+                url VARCHAR NOT NULL,
+                published_utc TIMESTAMPTZ NOT NULL,
+                summary VARCHAR NOT NULL DEFAULT '',
+                pillar VARCHAR NOT NULL,
+                severity VARCHAR NOT NULL,
+                polarity DOUBLE NOT NULL,
+                matched_keywords VARCHAR NOT NULL,
+                ingested_at_utc TIMESTAMPTZ NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS macro_economic_releases (
+                release_id VARCHAR PRIMARY KEY,
+                event_name VARCHAR NOT NULL,
+                country VARCHAR NOT NULL,
+                release_date DATE NOT NULL,
+                release_time_utc VARCHAR NOT NULL,
+                impact VARCHAR NOT NULL,
+                actual_value DOUBLE,
+                forecast_value DOUBLE,
+                previous_value DOUBLE,
+                surprise_delta DOUBLE,
+                directional_score DOUBLE NOT NULL,
+                raw_payload_json VARCHAR,
+                ingested_at_utc TIMESTAMPTZ NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS daily_narrative_intelligence (
+                intelligence_date DATE PRIMARY KEY,
+                synthesized_at_utc TIMESTAMPTZ NOT NULL,
+                hard_macro_score DOUBLE NOT NULL,
+                sentiment_score DOUBLE NOT NULL,
+                narrative_score DOUBLE NOT NULL,
+                composite_mni DOUBLE NOT NULL,
+                regime VARCHAR NOT NULL,
+                black_swan_flag BOOLEAN NOT NULL DEFAULT FALSE,
+                active_critical_alerts INTEGER NOT NULL DEFAULT 0,
+                dominant_pillar VARCHAR NOT NULL,
+                narrative_summary_id VARCHAR NOT NULL
+            );
+            """
+        )
+
+    def create_macro_mart_view(self) -> None:
+        """Create or replace analytical view mart_macro_narrative_daily."""
+        con = self.get_connection()
+        self.create_macro_tables()
+        with contextlib.suppress(Exception):
+            self.create_investment_signals_view()
+        con.execute(
+            """
+            CREATE OR REPLACE VIEW mart_macro_narrative_daily AS
+            SELECT
+                m.trade_date_utc,
+                m.market_close_usd,
+                m.sma_200,
+                m.mayer_multiple,
+                m.mvrv_ratio,
+                m.fng_value,
+                m.investment_signal,
+                COALESCE(n.composite_mni, 0.0) AS composite_mni,
+                COALESCE(n.regime, 'NEUTRAL_CHOP') AS macro_regime,
+                COALESCE(n.black_swan_flag, FALSE) AS black_swan_flag,
+                COALESCE(n.hard_macro_score, 0.0) AS hard_macro_score,
+                COALESCE(n.sentiment_score, 0.0) AS sentiment_score,
+                COALESCE(n.narrative_score, 0.0) AS narrative_score,
+                n.narrative_summary_id,
+                COALESCE(n.active_critical_alerts, 0) AS active_critical_alerts
+            FROM mart_btc_investment_signals_daily m
+            LEFT JOIN daily_narrative_intelligence n
+                ON CAST(m.trade_date_utc AS DATE) = n.intelligence_date;
+            """
+        )
+
+    def insert_macro_articles(self, articles: Sequence[MacroArticle]) -> int:
+        """Insert or replace news articles into macro_news_articles."""
+        if not articles:
+            return 0
+        con = self.get_connection()
+        self.create_macro_tables()
+        rows = [
+            (
+                a.article_id,
+                a.source,
+                a.title,
+                a.url,
+                a.published_utc,
+                a.summary,
+                a.pillar.value if hasattr(a.pillar, "value") else str(a.pillar),
+                a.severity.value if hasattr(a.severity, "value") else str(a.severity),
+                float(a.polarity),
+                ", ".join(a.matched_keywords)
+                if isinstance(a.matched_keywords, list)
+                else str(a.matched_keywords),
+                a.ingested_at_utc,
+            )
+            for a in articles
+        ]
+        con.executemany(
+            """
+            INSERT OR REPLACE INTO macro_news_articles (
+                article_id, source, title, url, published_utc, summary,
+                pillar, severity, polarity, matched_keywords, ingested_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            rows,
+        )
+        return len(rows)
+
+    def insert_macro_economic_releases(self, releases: Sequence[MacroEconomicRelease]) -> int:
+        """Insert or replace economic releases into macro_economic_releases."""
+        if not releases:
+            return 0
+        con = self.get_connection()
+        self.create_macro_tables()
+        rows = [
+            (
+                r.release_id,
+                r.event_name,
+                r.country,
+                r.release_date,
+                r.release_time_utc,
+                r.impact,
+                r.actual_value,
+                r.forecast_value,
+                r.previous_value,
+                r.surprise_delta,
+                float(r.directional_score),
+                r.raw_payload_json,
+                r.ingested_at_utc,
+            )
+            for r in releases
+        ]
+        con.executemany(
+            """
+            INSERT OR REPLACE INTO macro_economic_releases (
+                release_id, event_name, country, release_date, release_time_utc,
+                impact, actual_value, forecast_value, previous_value,
+                surprise_delta, directional_score, raw_payload_json, ingested_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            rows,
+        )
+        return len(rows)
+
+    def insert_daily_narrative_intelligence(self, report: DailyNarrativeReport) -> None:
+        """Insert or replace daily narrative intelligence report."""
+        con = self.get_connection()
+        self.create_macro_tables()
+        con.execute(
+            """
+            INSERT OR REPLACE INTO daily_narrative_intelligence (
+                intelligence_date, synthesized_at_utc, hard_macro_score,
+                sentiment_score, narrative_score, composite_mni,
+                regime, black_swan_flag, active_critical_alerts,
+                dominant_pillar, narrative_summary_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            [
+                report.intelligence_date,
+                report.synthesized_at_utc,
+                float(report.hard_macro_score),
+                float(report.sentiment_score),
+                float(report.narrative_score),
+                float(report.composite_mni),
+                report.regime.value if hasattr(report.regime, "value") else str(report.regime),
+                bool(report.black_swan_flag),
+                int(report.active_critical_alerts),
+                report.dominant_pillar.value
+                if hasattr(report.dominant_pillar, "value")
+                else str(report.dominant_pillar),
+                report.narrative_summary_id,
+            ],
+        )
+
+    def get_latest_narrative_intelligence(self) -> DailyNarrativeReport | None:
+        """Fetch the most recent daily narrative intelligence report."""
+        con = self.get_connection()
+        self.create_macro_tables()
+        cursor = con.execute(
+            """
+            SELECT
+                CAST(intelligence_date AS VARCHAR) AS intelligence_date,
+                CAST(synthesized_at_utc AS VARCHAR) AS synthesized_at_utc,
+                hard_macro_score, sentiment_score, narrative_score, composite_mni,
+                regime, black_swan_flag, active_critical_alerts,
+                dominant_pillar, narrative_summary_id
+            FROM daily_narrative_intelligence
+            ORDER BY intelligence_date DESC, synthesized_at_utc DESC
+            LIMIT 1;
+            """
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return DailyNarrativeReport(
+            intelligence_date=row[0]
+            if isinstance(row[0], date)
+            else date.fromisoformat(str(row[0])),
+            synthesized_at_utc=row[1]
+            if isinstance(row[1], datetime)
+            else datetime.fromisoformat(str(row[1])),
+            hard_macro_score=float(row[2]),
+            sentiment_score=float(row[3]),
+            narrative_score=float(row[4]),
+            composite_mni=float(row[5]),
+            regime=MacroRegime(row[6]),
+            black_swan_flag=bool(row[7]),
+            active_critical_alerts=int(row[8]),
+            dominant_pillar=MacroPillar(row[9]),
+            narrative_summary_id=str(row[10]),
+        )
+
+    def get_macro_articles(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Fetch latest ingested macro news articles."""
+        con = self.get_connection()
+        self.create_macro_tables()
+        cursor = con.execute(
+            """
+            SELECT
+                article_id, source, title, url,
+                CAST(published_utc AS VARCHAR) AS published_utc,
+                summary, pillar, severity, polarity, matched_keywords,
+                CAST(ingested_at_utc AS VARCHAR) AS ingested_at_utc
+            FROM macro_news_articles
+            ORDER BY published_utc DESC
+            LIMIT ?;
+            """,
+            [limit],
+        )
+        rows = cursor.fetchall()
+        cols = [desc[0] for desc in cursor.description]
+        result: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(zip(cols, r, strict=True))
+            if isinstance(d.get("published_utc"), datetime):
+                d["published_utc"] = d["published_utc"].isoformat()
+            if isinstance(d.get("ingested_at_utc"), datetime):
+                d["ingested_at_utc"] = d["ingested_at_utc"].isoformat()
+            result.append(d)
+        return result
+
+    def get_macro_economic_releases(self, days: int = 7) -> list[dict[str, Any]]:
+        """Fetch scheduled/recent macroeconomic releases."""
+        con = self.get_connection()
+        self.create_macro_tables()
+        cursor = con.execute(
+            """
+            SELECT
+                release_id, event_name, country,
+                CAST(release_date AS VARCHAR) AS release_date,
+                release_time_utc, impact, actual_value, forecast_value, previous_value,
+                surprise_delta, directional_score, raw_payload_json,
+                CAST(ingested_at_utc AS VARCHAR) AS ingested_at_utc
+            FROM macro_economic_releases
+            ORDER BY release_date DESC, release_time_utc DESC
+            LIMIT 100;
+            """
+        )
+        rows = cursor.fetchall()
+        cols = [desc[0] for desc in cursor.description]
+        result: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(zip(cols, r, strict=True))
+            if isinstance(d.get("release_date"), date):
+                d["release_date"] = d["release_date"].isoformat()
+            if isinstance(d.get("ingested_at_utc"), datetime):
+                d["ingested_at_utc"] = d["ingested_at_utc"].isoformat()
+            result.append(d)
+        return result
+
     def initialize(self) -> None:
         """Initialize database schema, tables, and views."""
         self.create_metadata_table()
@@ -979,11 +1266,13 @@ class DuckDBManager:
         self.create_signal_history_table()
         self.create_news_sentinel_alerts_table()
         self.create_paper_portfolio_tables()
+        self.create_macro_tables()
         self.create_hourly_view()
         self.create_daily_mart_view()
         self.create_network_fact_view()
         self.create_cross_domain_mart_view()
         self.create_investment_signals_view()
+        self.create_macro_mart_view()
 
     def record_run(
         self,
