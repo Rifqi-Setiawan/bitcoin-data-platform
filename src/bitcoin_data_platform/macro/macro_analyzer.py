@@ -29,7 +29,7 @@ def parse_numeric_economic_value(val: Any) -> float | None:
     """Parse economic indicator string like '0.3%', '250K', '1.4M', '5.25%' into float."""
     if val is None:
         return None
-    if isinstance(val, (int, float)):
+    if isinstance(val, int | float):
         if math.isnan(val):
             return None
         return float(val)
