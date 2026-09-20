@@ -5,11 +5,14 @@ Coordinates personas, weighted consensus, and symbolic invariant clamping.
 
 from __future__ import annotations
 
+import logging
+import os
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from bitcoin_data_platform.committee.invariant_solver import InvariantSolver
+from bitcoin_data_platform.committee.llm_reasoner import CommitteeLLMReasoner
 from bitcoin_data_platform.committee.models import (
     AllocationAction,
     ClampingReceipt,
@@ -52,10 +55,26 @@ class InvestmentCommitteeEngine:
         db_manager: DuckDBManager,
         invariant_solver: InvariantSolver | None = None,
         llm_client: Any | None = None,
+        use_llm: bool | None = None,
     ) -> None:
         self.db = db_manager
         self.solver = invariant_solver or InvariantSolver()
-        self.llm = llm_client
+        is_testing = bool(os.getenv("PYTEST_CURRENT_TEST"))
+        env_val = os.getenv("BDP_USE_LLM", "true").lower()
+        effective_use_llm = (
+            use_llm if use_llm is not None else (not is_testing and env_val in ("true", "1", "yes"))
+        )
+        if llm_client is not None:
+            self.llm = llm_client
+        elif effective_use_llm:
+            try:
+                self.llm = CommitteeLLMReasoner()
+            except Exception as exc:
+                logger = logging.getLogger(__name__)
+                logger.warning("Failed initializing CommitteeLLMReasoner: %s", exc)
+                self.llm = None
+        else:
+            self.llm = None
 
     def deliberate(
         self,
@@ -72,12 +91,30 @@ class InvestmentCommitteeEngine:
         user_alpha = self._load_user_intelligence(target_date)
         port_state = portfolio_state or self._load_portfolio_state()
 
-        # 2. Collect Persona Evaluations
-        votes: list[PersonaVote] = [
-            MacroStrategistPersona.evaluate(snapshot, user_alpha, base_budget, memo_id),
-            ValuationAnalystPersona.evaluate(snapshot, base_budget, memo_id),
-            RiskOfficerPersona.evaluate(snapshot, port_state, base_budget, memo_id),
-        ]
+        # 2. Collect Persona Evaluations (Neural Reasoning via cx/gpt-5.6-sol or heuristic fallback)
+        votes: list[PersonaVote] | None = None
+        if self.llm is not None and hasattr(self.llm, "evaluate_committee"):
+            try:
+                votes = self.llm.evaluate_committee(
+                    snapshot=snapshot,
+                    user_alpha=user_alpha,
+                    portfolio_state=port_state,
+                    base_budget=base_budget,
+                    memo_id=memo_id,
+                )
+            except Exception as llm_err:
+                logging.getLogger(__name__).warning(
+                    "LLM committee reasoning failed: %s. Falling back to quantitative heuristic.",
+                    llm_err,
+                )
+                votes = None
+
+        if not votes:
+            votes = [
+                MacroStrategistPersona.evaluate(snapshot, user_alpha, base_budget, memo_id),
+                ValuationAnalystPersona.evaluate(snapshot, base_budget, memo_id),
+                RiskOfficerPersona.evaluate(snapshot, port_state, base_budget, memo_id),
+            ]
 
         # 3. Calculate Weighted Consensus Score
         consensus_score = self._calculate_consensus(votes)

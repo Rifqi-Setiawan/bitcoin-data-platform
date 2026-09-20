@@ -250,7 +250,7 @@ class PipelineOrchestrator:
             # Step 5: Investment Committee Deliberation
             t0 = time.monotonic()
             try:
-                committee = InvestmentCommitteeEngine(self.db)
+                committee = InvestmentCommitteeEngine(self.db, use_llm=True)
                 memo = committee.deliberate(target_date=today_date, dry_run=False)
                 steps.append(
                     JobStepResult(

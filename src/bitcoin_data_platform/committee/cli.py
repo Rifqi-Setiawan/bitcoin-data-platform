@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import UTC, date, datetime
 
@@ -29,6 +30,9 @@ def register_committee_cli(
         metavar="<subcommand>",
     )
 
+    is_testing = bool(os.getenv("PYTEST_CURRENT_TEST"))
+    default_provider = "mock" if is_testing else "9router"
+
     # 1. deliberate
     delib_parser = comm_subparsers.add_parser(
         "deliberate",
@@ -41,14 +45,14 @@ def register_committee_cli(
     )
     delib_parser.add_argument(
         "--provider",
-        choices=["mock", "hermes", "openai"],
-        default="mock",
-        help="LLM provider architecture (default: mock offline).",
+        choices=["mock", "hermes", "openai", "9router"],
+        default=default_provider,
+        help="LLM provider architecture (default: 9router).",
     )
     delib_parser.add_argument(
         "--model",
-        default="mock-committee-v1",
-        help="Model name for neural reasoning.",
+        default="cx/gpt-5.6-sol",
+        help="Model name for neural reasoning (default: cx/gpt-5.6-sol).",
     )
     delib_parser.add_argument(
         "--dry-run",
@@ -123,7 +127,15 @@ def _handle_deliberate(args: argparse.Namespace, db_path: str) -> int:
 
     with DuckDBManager(db_path) as db:
         db.initialize()
-        engine = InvestmentCommitteeEngine(db)
+        use_llm = getattr(args, "provider", "9router") != "mock"
+        from bitcoin_data_platform.committee.llm_reasoner import CommitteeLLMReasoner
+
+        llm = (
+            CommitteeLLMReasoner(model=getattr(args, "model", "cx/gpt-5.6-sol"), enabled=use_llm)
+            if use_llm
+            else None
+        )
+        engine = InvestmentCommitteeEngine(db, llm_client=llm, use_llm=use_llm)
         memo = engine.deliberate(target_date=target_date, dry_run=args.dry_run)
 
         print("=" * 70)
