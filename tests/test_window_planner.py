@@ -3,6 +3,7 @@
 import os
 import socket
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -267,7 +268,11 @@ def test_plan_backfill_domain_object() -> None:
     assert d["windows"][0]["expected_candle_count"] == 300
 
 
-def test_planning_performs_no_network_or_filesystem_access(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_planning_performs_no_network_or_filesystem_access(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
     def forbidden_connect(*args: object, **kwargs: object) -> None:
         pytest.fail("Network access was attempted during window planning!")
 
