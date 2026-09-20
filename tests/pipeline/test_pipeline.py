@@ -100,6 +100,7 @@ def test_pipeline_run_hourly_dag(tmp_path: Path, tmp_duckdb: DuckDBManager) -> N
 
 # 39. test_pipeline_run_daily_dag
 def test_pipeline_run_daily_dag(tmp_path: Path, tmp_duckdb: DuckDBManager) -> None:
+    tmp_duckdb.set_watermark(datetime(2026, 9, 19, 0, 0, tzinfo=UTC), "run-test")
     orchestrator = PipelineOrchestrator(
         repo_root=tmp_path,
         db_manager=tmp_duckdb,

@@ -135,6 +135,11 @@ def normalize_envelopes(
                 now_utc=now_utc,
             )
 
+            # Coinbase API returns candles for closed window [start, end].
+            # Filter out any end boundary candle to enforce [start_utc, end_utc).
+            if candle.candle_start_utc < env.start_utc or candle.candle_start_utc >= env.end_utc:
+                continue
+
             natural_key = (
                 candle.source,
                 candle.product_id,

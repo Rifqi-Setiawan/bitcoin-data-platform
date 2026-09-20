@@ -186,8 +186,7 @@ class SignalGenerator:
 
     def generate_latest(self) -> InvestmentSignal:
         """Query mart_btc_investment_signals_daily and generate the latest signal."""
-        con = self.db_manager.get_connection()
-        row = con.execute(
+        rows = self.db_manager.execute_query(
             """
             SELECT trade_date_utc, market_close_usd, sma_200, mayer_multiple,
                    mvrv_ratio, fng_value, fng_classification,
@@ -196,27 +195,49 @@ class SignalGenerator:
             ORDER BY trade_date_utc DESC
             LIMIT 1;
             """
-        ).fetchone()
-        if row is None:
+        )
+        if not rows:
             raise ValueError("No signal data found in mart_btc_investment_signals_daily")
-        return self._row_to_signal(row)
+        r = rows[0]
+        row_tuple = (
+            r["trade_date_utc"],
+            r["market_close_usd"],
+            r["sma_200"],
+            r["mayer_multiple"],
+            r["mvrv_ratio"],
+            r["fng_value"],
+            r["fng_classification"],
+            r["has_high_impact_macro_event"],
+            r["investment_signal"],
+        )
+        return self._row_to_signal(row_tuple)
 
     def generate_for_date(self, target_date: date) -> InvestmentSignal | None:
         """Query mart_btc_investment_signals_daily and generate signal for specific date."""
-        con = self.db_manager.get_connection()
-        row = con.execute(
-            """
+        rows = self.db_manager.execute_query(
+            f"""
             SELECT trade_date_utc, market_close_usd, sma_200, mayer_multiple,
                    mvrv_ratio, fng_value, fng_classification,
                    has_high_impact_macro_event, investment_signal
             FROM mart_btc_investment_signals_daily
-            WHERE CAST(trade_date_utc AS DATE) = ?;
-            """,
-            [target_date],
-        ).fetchone()
-        if row is None:
+            WHERE CAST(trade_date_utc AS DATE) = DATE '{target_date.isoformat()}';
+            """
+        )
+        if not rows:
             return None
-        return self._row_to_signal(row)
+        r = rows[0]
+        row_tuple = (
+            r["trade_date_utc"],
+            r["market_close_usd"],
+            r["sma_200"],
+            r["mayer_multiple"],
+            r["mvrv_ratio"],
+            r["fng_value"],
+            r["fng_classification"],
+            r["has_high_impact_macro_event"],
+            r["investment_signal"],
+        )
+        return self._row_to_signal(row_tuple)
 
     def save_signal(self, signal: InvestmentSignal) -> None:
         """Persist investment signal to signal_history table."""

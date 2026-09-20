@@ -18,6 +18,7 @@ def _seed_conformed_mart(db_file: Path, date_str: str = "2026-09-19") -> None:
     """Helper to seed mock conformed mart snapshot so committee tests run against valid marts."""
     with DuckDBManager(db_file) as mgr:
         mgr.initialize()
+        mgr.set_watermark(datetime(2026, 9, 19, 0, 0, tzinfo=UTC), "test-seed")
         con = mgr.get_connection()
         con.execute(
             f"""

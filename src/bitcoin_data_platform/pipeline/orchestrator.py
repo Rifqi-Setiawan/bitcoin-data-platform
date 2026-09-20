@@ -9,6 +9,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from bitcoin_data_platform.committee.engine import InvestmentCommitteeEngine
+from bitcoin_data_platform.exceptions import MarketDataUnavailableError
 from bitcoin_data_platform.macro.feed_ingester import FeedIngester
 from bitcoin_data_platform.macro.sentiment_analyzer import SentimentAnalyzer
 from bitcoin_data_platform.macro.synthesizer import MacroNarrativeSynthesizer
@@ -147,10 +148,16 @@ class PipelineOrchestrator:
         with self.lock_mgr.acquire(PipelineCadence.DAILY):
             self.db.initialize()
 
-            # Step 1: Incremental Sync (Market Candles)
+            # Step 1: Incremental Sync (Market Candles & Watermark)
             t0 = time.monotonic()
             try:
                 watermark = self.db.get_watermark()
+                # If watermark is present and Coinbase client is available, verify fresh watermark
+                if watermark is None:
+                    # Fail-closed: require baseline backfill before daily runs
+                    raise MarketDataUnavailableError(
+                        "No watermark found in database. Run an initial backfill first."
+                    )
                 steps.append(
                     JobStepResult(
                         step_name="incremental_market_sync",
