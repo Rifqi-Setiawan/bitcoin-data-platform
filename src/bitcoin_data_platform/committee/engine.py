@@ -16,6 +16,7 @@ from bitcoin_data_platform.committee.llm_reasoner import CommitteeLLMReasoner
 from bitcoin_data_platform.committee.models import (
     AllocationAction,
     ClampingReceipt,
+    CommitteePersona,
     InvestmentMemorandum,
     MemberStance,
     PersonaVote,
@@ -30,6 +31,7 @@ from bitcoin_data_platform.committee.prompt_templates import (
     generate_executive_summary_id,
     render_memorandum_markdown,
 )
+from bitcoin_data_platform.exceptions import MarketDataUnavailableError
 from bitcoin_data_platform.storage.duckdb_manager import DuckDBManager
 
 
@@ -56,9 +58,11 @@ class InvestmentCommitteeEngine:
         invariant_solver: InvariantSolver | None = None,
         llm_client: Any | None = None,
         use_llm: bool | None = None,
+        allow_unpopulated: bool = False,
     ) -> None:
         self.db = db_manager
         self.solver = invariant_solver or InvariantSolver()
+        self.allow_unpopulated = allow_unpopulated
         is_testing = bool(os.getenv("PYTEST_CURRENT_TEST"))
         env_val = os.getenv("BDP_USE_LLM", "true").lower()
         effective_use_llm = (
@@ -82,12 +86,27 @@ class InvestmentCommitteeEngine:
         portfolio_state: dict[str, Any] | None = None,
         dry_run: bool = False,
         base_budget: float = 10.0,
+        allow_unpopulated: bool | None = None,
+        fail_closed_action: bool = False,
     ) -> InvestmentMemorandum:
         """Run daily investment committee deliberation session."""
         memo_id = str(uuid.uuid4())
 
         # 1. Fetch conformed snapshot & active user alpha
+        effective_allow_unpopulated = (
+            allow_unpopulated if allow_unpopulated is not None else self.allow_unpopulated
+        )
         snapshot = self._load_daily_snapshot(target_date)
+        if snapshot is None:
+            if not effective_allow_unpopulated:
+                if fail_closed_action:
+                    return self._build_data_unavailable_memorandum(target_date, memo_id)
+                raise MarketDataUnavailableError(
+                    f"Market data snapshot unavailable in DuckDB for date {target_date}. "
+                    "Analytical marts are unpopulated (fail-closed)."
+                )
+            snapshot = self._fallback_snapshot(target_date)
+
         user_alpha = self._load_user_intelligence(target_date)
         port_state = portfolio_state or self._load_portfolio_state()
 
@@ -252,7 +271,7 @@ class InvestmentCommitteeEngine:
 
         return action, round(proposed_usd, 2)
 
-    def _load_daily_snapshot(self, target_date: date) -> dict[str, Any]:
+    def _load_daily_snapshot(self, target_date: date) -> dict[str, Any] | None:
         """Load conformed market & macro snapshot for target date from DuckDB."""
         self.db.initialize()
         try:
@@ -279,7 +298,40 @@ class InvestmentCommitteeEngine:
         except Exception:
             pass
 
-        # Fallback snapshot if database is unpopulated or missing date
+        # Fallback query to mart_btc_investment_signals_daily if view has no rows
+        try:
+            sql2 = """
+            SELECT
+                m.trade_date_utc,
+                m.market_close_usd,
+                m.sma_200,
+                m.mayer_multiple,
+                m.mvrv_ratio,
+                m.fng_value,
+                0.0 AS composite_mni,
+                'NEUTRAL_CHOP' AS macro_regime,
+                FALSE AS black_swan_flag
+            FROM mart_btc_investment_signals_daily m
+            WHERE CAST(m.trade_date_utc AS DATE) = ?
+            LIMIT 1;
+            """
+            rows2 = self.db.execute_query(sql2.replace("?", f"'{target_date.isoformat()}'"))
+            if rows2:
+                res2 = dict(rows2[0])
+                res2["last_close_usd"] = res2.get("market_close_usd", 0.0)
+                return res2
+        except Exception:
+            pass
+
+        return None
+
+    @staticmethod
+    def _fallback_snapshot(target_date: date) -> dict[str, Any]:
+        """Synthetic fallback snapshot used ONLY when allow_unpopulated=True is explicitly set."""
+        logging.getLogger(__name__).warning(
+            "Marts unpopulated: using fallback snapshot for %s (allow_unpopulated=True)",
+            target_date.isoformat(),
+        )
         return {
             "trade_date_utc": target_date.isoformat(),
             "market_close_usd": 65000.0,
@@ -293,6 +345,76 @@ class InvestmentCommitteeEngine:
             "black_swan_flag": False,
             "macro_proximity_minutes": None,
         }
+
+    def _build_data_unavailable_memorandum(
+        self, target_date: date, memo_id: str
+    ) -> InvestmentMemorandum:
+        """Create an emergency halt / DATA_UNAVAILABLE memorandum when marts are unpopulated."""
+        now = datetime.now(UTC)
+        votes = [
+            PersonaVote(
+                vote_id=uuid.uuid4().hex[:16],
+                memo_id=memo_id,
+                persona=CommitteePersona.MACRO_STRATEGIST,
+                stance=MemberStance.CRISIS,
+                target_allocation_usd=0.0,
+                confidence=1.0,
+                rationale=(
+                    "Data pasar analitik tidak tersedia (Marts unpopulated). "
+                    "Membekukan alokasi modal baru."
+                ),
+                voted_at_utc=now,
+            ),
+            PersonaVote(
+                vote_id=uuid.uuid4().hex[:16],
+                memo_id=memo_id,
+                persona=CommitteePersona.VALUATION_ANALYST,
+                stance=MemberStance.CRISIS,
+                target_allocation_usd=0.0,
+                confidence=1.0,
+                rationale="Metrik on-chain dan valuasi tidak dapat dihitung tanpa conformed marts.",
+                voted_at_utc=now,
+            ),
+            PersonaVote(
+                vote_id=uuid.uuid4().hex[:16],
+                memo_id=memo_id,
+                persona=CommitteePersona.RISK_OFFICER,
+                stance=MemberStance.CRISIS,
+                target_allocation_usd=0.0,
+                confidence=1.0,
+                rationale=(
+                    "RiskGuard Pre-Trade Fail-Closed: Operasi dihentikan karena ketiadaan data."
+                ),
+                voted_at_utc=now,
+            ),
+        ]
+        return InvestmentMemorandum(
+            memo_id=memo_id,
+            memo_date=target_date,
+            created_at_utc=now,
+            market_regime="DATA_UNAVAILABLE",
+            composite_mni=0.0,
+            consensus_score=-1.0,
+            executive_summary_id=(
+                "HALT: Data pasar tidak tersedia di analytical marts. "
+                "Eksekusi perdagangan dihentikan (fail-closed)."
+            ),
+            macro_thesis=votes[0].rationale,
+            valuation_thesis=votes[1].rationale,
+            technical_thesis=votes[2].rationale,
+            dissenting_opinions="Persona sepakat membekukan alokasi karena data pasar kosong.",
+            proposed_action=AllocationAction.DATA_UNAVAILABLE,
+            proposed_allocation_usd=0.0,
+            clamped_allocation_usd=0.0,
+            allocation_clamped=True,
+            clamping_reason="DATA_UNAVAILABLE: Marts unpopulated - fail-closed halt",
+            risk_guard_passed=False,
+            memo_markdown=(
+                "# Institutional Investment Committee Memorandum\n\n"
+                "**STATUS: DATA_UNAVAILABLE (FAIL-CLOSED)**\n"
+            ),
+            votes=votes,
+        )
 
     def _load_user_intelligence(self, target_date: date) -> list[dict[str, Any]]:
         """Load active user intelligence records within 72h window of target date."""

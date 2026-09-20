@@ -9,6 +9,7 @@ import sys
 from datetime import UTC, date, datetime
 
 from bitcoin_data_platform.committee.engine import InvestmentCommitteeEngine
+from bitcoin_data_platform.exceptions import MarketDataUnavailableError
 from bitcoin_data_platform.storage.duckdb_manager import DuckDBManager
 
 
@@ -58,6 +59,12 @@ def register_committee_cli(
         "--dry-run",
         action="store_true",
         help="Execute deliberation session without writing memorandum to DuckDB.",
+    )
+    delib_parser.add_argument(
+        "--allow-unpopulated",
+        action="store_true",
+        default=False,
+        help="Allow deliberation to use synthetic fallback when marts are unpopulated.",
     )
     delib_parser.add_argument(
         "--db-path",
@@ -135,8 +142,19 @@ def _handle_deliberate(args: argparse.Namespace, db_path: str) -> int:
             if use_llm
             else None
         )
-        engine = InvestmentCommitteeEngine(db, llm_client=llm, use_llm=use_llm)
-        memo = engine.deliberate(target_date=target_date, dry_run=args.dry_run)
+        allow_unpopulated = getattr(args, "allow_unpopulated", False)
+        engine = InvestmentCommitteeEngine(
+            db, llm_client=llm, use_llm=use_llm, allow_unpopulated=allow_unpopulated
+        )
+        try:
+            memo = engine.deliberate(
+                target_date=target_date,
+                dry_run=args.dry_run,
+                allow_unpopulated=allow_unpopulated,
+            )
+        except MarketDataUnavailableError as exc:
+            print(f"Market data unavailable error: {exc}", file=sys.stderr)
+            return 2
 
         print("=" * 70)
         print(f"🏛️  INVESTMENT COMMITTEE DELIBERATION — {memo.memo_date.isoformat()}")

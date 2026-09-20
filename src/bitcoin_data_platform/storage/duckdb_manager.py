@@ -499,6 +499,15 @@ class DuckDBManager:
     def create_daily_mart_view(self) -> None:
         """Create or replace analytical view mart_btc_usd_daily derived from hourly fact."""
         con = self.get_connection()
+        # Preserve base table fixture if created in test setup
+        with contextlib.suppress(Exception):
+            table_check = con.execute(
+                "SELECT table_type FROM information_schema.tables "
+                "WHERE table_name = 'mart_btc_usd_daily';"
+            ).fetchone()
+            if table_check and table_check[0] == "BASE TABLE":
+                return
+
         sql = """
         CREATE OR REPLACE VIEW mart_btc_usd_daily AS
         SELECT
@@ -690,6 +699,15 @@ class DuckDBManager:
         self.create_network_fact_view()
         self.create_sentiment_table()
         self.create_macro_events_table()
+
+        # Preserve base table fixture if created in test setup
+        with contextlib.suppress(Exception):
+            table_check = con.execute(
+                "SELECT table_type FROM information_schema.tables "
+                "WHERE table_name = 'mart_btc_investment_signals_daily';"
+            ).fetchone()
+            if table_check and table_check[0] == "BASE TABLE":
+                return
 
         sql = """
         CREATE OR REPLACE VIEW mart_btc_investment_signals_daily AS
@@ -1040,6 +1058,15 @@ class DuckDBManager:
         self.create_macro_tables()
         with contextlib.suppress(Exception):
             self.create_investment_signals_view()
+        # Preserve base table fixture if created in test setup
+        with contextlib.suppress(Exception):
+            table_check = con.execute(
+                "SELECT table_type FROM information_schema.tables "
+                "WHERE table_name = 'mart_macro_narrative_daily';"
+            ).fetchone()
+            if table_check and table_check[0] == "BASE TABLE":
+                return
+
         con.execute(
             """
             CREATE OR REPLACE VIEW mart_macro_narrative_daily AS

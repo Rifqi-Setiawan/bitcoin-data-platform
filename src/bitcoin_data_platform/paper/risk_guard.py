@@ -27,6 +27,13 @@ class RiskGuard:
         """Check whether emergency filesystem kill-switch exists."""
         return self.kill_switch_path.exists()
 
+    def activate_kill_switch(self, reason: str = "") -> None:
+        """Activate emergency filesystem kill-switch."""
+        self.kill_switch_path.parent.mkdir(parents=True, exist_ok=True)
+        self.kill_switch_path.write_text(
+            f"ACTIVATED: {reason or 'Emergency kill switch triggered'}\n"
+        )
+
     def validate_trade(
         self,
         portfolio: PaperPortfolioBalance,

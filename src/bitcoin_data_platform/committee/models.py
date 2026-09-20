@@ -7,6 +7,8 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Any
 
+from bitcoin_data_platform.exceptions import MarketDataUnavailableError
+
 
 class CommitteePersona(StrEnum):
     """Personas participating in the investment committee."""
@@ -34,6 +36,7 @@ class AllocationAction(StrEnum):
     STANDARD_DCA = "STANDARD_DCA"
     DEFENSIVE_HOLD = "DEFENSIVE_HOLD"
     EMERGENCY_HALT = "EMERGENCY_HALT"
+    DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
 
 
 @dataclass(frozen=True)
@@ -131,3 +134,14 @@ class InvestmentMemorandum:
             "memo_markdown": self.memo_markdown,
             "votes": [v.to_dict() for v in self.votes],
         }
+
+
+__all__ = [
+    "AllocationAction",
+    "ClampingReceipt",
+    "CommitteePersona",
+    "InvestmentMemorandum",
+    "MarketDataUnavailableError",
+    "MemberStance",
+    "PersonaVote",
+]

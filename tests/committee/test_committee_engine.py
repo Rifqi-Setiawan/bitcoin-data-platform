@@ -28,6 +28,29 @@ def tmp_duckdb(tmp_path: Path) -> DuckDBManager:
     mgr = DuckDBManager(db_file)
     with mgr:
         mgr.initialize()
+        # Seed test snapshot into mart_macro_narrative_daily fixture
+        con = mgr.get_connection()
+        con.execute(
+            """
+            DROP VIEW IF EXISTS mart_macro_narrative_daily;
+            CREATE TABLE mart_macro_narrative_daily (
+                trade_date_utc TIMESTAMPTZ,
+                market_close_usd DOUBLE,
+                sma_200 DOUBLE,
+                mayer_multiple DOUBLE,
+                mvrv_ratio DOUBLE,
+                fng_value INTEGER,
+                composite_mni DOUBLE,
+                macro_regime VARCHAR,
+                black_swan_flag BOOLEAN
+            );
+            INSERT INTO mart_macro_narrative_daily VALUES
+            (
+                '2026-09-19 00:00:00+00', 65000.0, 60000.0, 1.08, 1.55, 52, 0.25,
+                'CAUTIOUS_BULL', false,
+            );
+            """
+        )
     return mgr
 
 

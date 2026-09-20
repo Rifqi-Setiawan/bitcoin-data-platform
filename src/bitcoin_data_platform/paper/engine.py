@@ -11,6 +11,7 @@ from typing import Any
 import duckdb
 import httpx
 
+from bitcoin_data_platform.exceptions import MarketDataUnavailableError
 from bitcoin_data_platform.paper.models import (
     PaperPortfolioBalance,
     PaperSnapshotRecord,
@@ -38,12 +39,14 @@ class PaperTradingEngine:
         fee_bps: float = 10.0,  # 10.0 bps = 0.10% Coinbase spot fee
         risk_guard: RiskGuard | None = None,
         kill_switch_path: Path | str = "data/state/PAPER_KILL_SWITCH",
+        allow_unpopulated: bool = False,
     ) -> None:
         self.db_path_str = str(db_path)
         self.db_path = Path(db_path) if self.db_path_str != ":memory:" else None
         self.portfolio_id = portfolio_id
         self.fee_bps = fee_bps
         self.risk_guard = risk_guard or RiskGuard(kill_switch_path=kill_switch_path)
+        self.allow_unpopulated = allow_unpopulated
 
     def _get_connection(self, read_only: bool = False) -> duckdb.DuckDBPyConnection:
         """Create a fresh DuckDB connection with strict UTC timezone."""
@@ -316,7 +319,17 @@ class PaperTradingEngine:
                 "⚪ DCA STANDAR: Eksekusi harga manual (forced spot price).",
             )
 
-        # Fallback to live Coinbase spot ticker if daily analytical mart is not yet populated
+        # Analytical marts are unpopulated and no forced price provided
+        if not self.allow_unpopulated:
+            self.risk_guard.activate_kill_switch(
+                reason=f"Market data unavailable in DuckDB for trade date {trade_date}"
+            )
+            raise MarketDataUnavailableError(
+                f"No market data available in analytical marts for trade date {trade_date}. "
+                "Trading halted fail-closed and kill switch activated."
+            )
+
+        # Fallback to live Coinbase spot ticker ONLY when allow_unpopulated=True is explicitly set
         try:
             r = httpx.get(
                 "https://api.exchange.coinbase.com/products/BTC-USD/ticker",
@@ -334,7 +347,9 @@ class PaperTradingEngine:
         except Exception as ticker_err:
             logger.warning(f"Failed fetching live Coinbase ticker: {ticker_err}")
 
-        raise ValueError(f"No market data or spot price available for trade date {trade_date}")
+        raise MarketDataUnavailableError(
+            f"No market data or spot price available for trade date {trade_date}"
+        )
 
     def step(
         self,

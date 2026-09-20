@@ -251,7 +251,10 @@ class PipelineOrchestrator:
             t0 = time.monotonic()
             try:
                 committee = InvestmentCommitteeEngine(self.db, use_llm=True)
-                memo = committee.deliberate(target_date=today_date, dry_run=False)
+                # In daily pipeline, generate fail-closed memo if marts unpopulated
+                memo = committee.deliberate(
+                    target_date=today_date, dry_run=False, fail_closed_action=True
+                )
                 steps.append(
                     JobStepResult(
                         step_name="investment_committee_deliberation",

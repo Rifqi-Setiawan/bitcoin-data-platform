@@ -11,6 +11,35 @@ import pytest
 from bitcoin_data_platform.cli import main
 from bitcoin_data_platform.paper.models import PaperTradeRecord
 from bitcoin_data_platform.sources.sentiment_contract import SentimentRecord
+from bitcoin_data_platform.storage.duckdb_manager import DuckDBManager
+
+
+def _seed_conformed_mart(db_file: Path, date_str: str = "2026-09-19") -> None:
+    """Helper to seed mock conformed mart snapshot so committee tests run against valid marts."""
+    with DuckDBManager(db_file) as mgr:
+        mgr.initialize()
+        con = mgr.get_connection()
+        con.execute(
+            f"""
+            DROP VIEW IF EXISTS mart_macro_narrative_daily;
+            CREATE TABLE IF NOT EXISTS mart_macro_narrative_daily (
+                trade_date_utc TIMESTAMPTZ,
+                market_close_usd DOUBLE,
+                sma_200 DOUBLE,
+                mayer_multiple DOUBLE,
+                mvrv_ratio DOUBLE,
+                fng_value INTEGER,
+                composite_mni DOUBLE,
+                macro_regime VARCHAR,
+                black_swan_flag BOOLEAN
+            );
+            INSERT INTO mart_macro_narrative_daily VALUES
+            (
+                '{date_str} 00:00:00+00', 65000.0, 60000.0, 1.08, 1.55, 52, 0.25,
+                'CAUTIOUS_BULL', false
+            );
+            """
+        )
 
 
 # 51. test_cli_committee_deliberate_dry_run
@@ -18,6 +47,7 @@ def test_cli_committee_deliberate_dry_run(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     db_file = tmp_path / "cli_comm.duckdb"
+    _seed_conformed_mart(db_file, "2026-09-19")
     code = main(
         [
             "committee",
@@ -39,6 +69,7 @@ def test_cli_committee_deliberate_dry_run(
 # 52. test_cli_committee_memo_render
 def test_cli_committee_memo_render(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     db_file = tmp_path / "cli_memo.duckdb"
+    _seed_conformed_mart(db_file, "2026-09-19")
     # First deliberate and save
     main(["committee", "deliberate", "--date", "2026-09-19", "--db-path", str(db_file)])
     capsys.readouterr()
@@ -65,6 +96,7 @@ def test_cli_committee_memo_render(tmp_path: Path, capsys: pytest.CaptureFixture
 # 53. test_cli_committee_status
 def test_cli_committee_status(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     db_file = tmp_path / "cli_status.duckdb"
+    _seed_conformed_mart(db_file, "2026-09-19")
     main(["committee", "deliberate", "--date", "2026-09-19", "--db-path", str(db_file)])
     capsys.readouterr()
 
@@ -137,6 +169,7 @@ def test_cli_intelligence_list(tmp_path: Path, capsys: pytest.CaptureFixture[str
 # 56. test_cli_pipeline_run_daily
 def test_cli_pipeline_run_daily(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     db_file = tmp_path / "cli_pipeline.duckdb"
+    _seed_conformed_mart(db_file, "2026-09-19")
 
     with (
         patch("bitcoin_data_platform.pipeline.orchestrator.SentimentClient") as mock_sent,
