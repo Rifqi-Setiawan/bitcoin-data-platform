@@ -6,6 +6,7 @@ import configparser
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -130,20 +131,28 @@ def test_pipeline_run_daily_dag(tmp_path: Path, tmp_duckdb: DuckDBManager) -> No
         mock_paper_inst = MagicMock()
         from bitcoin_data_platform.paper.models import PaperTradeRecord
 
-        mock_paper_inst.step.return_value = PaperTradeRecord(
-            trade_id="t-1",
-            portfolio_id="default",
-            executed_at_utc=datetime.now(UTC),
-            trade_date=datetime.now(UTC).date(),
-            side="BUY",
-            signal_regime="STANDARD_DCA",
-            spot_price=65000.0,
-            gross_amount_usd=10.0,
-            fee_usd=0.01,
-            net_amount_usd=9.99,
-            btc_amount=0.00015,
-            narrative="Test Step",
-        )
+        def _mock_step(
+            trade_date: Any,
+            daily_budget: float = 10.0,
+            force_spot_price: float | None = None,
+            committee_memo: Any = None,
+        ) -> PaperTradeRecord:
+            return PaperTradeRecord(
+                trade_id="t-1",
+                portfolio_id="default",
+                executed_at_utc=datetime.now(UTC),
+                trade_date=datetime.now(UTC).date(),
+                side="BUY",
+                signal_regime="STANDARD_DCA",
+                spot_price=65000.0,
+                gross_amount_usd=10.0,
+                fee_usd=0.01,
+                net_amount_usd=9.99,
+                btc_amount=0.00015,
+                narrative="Test Step",
+            )
+
+        mock_paper_inst.step.side_effect = _mock_step
         mock_paper.return_value = mock_paper_inst
 
         report = orchestrator.run_daily()

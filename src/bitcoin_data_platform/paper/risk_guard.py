@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from bitcoin_data_platform.committee.invariant_solver import InvariantSolver
@@ -13,12 +14,17 @@ class RiskGuard:
 
     def __init__(
         self,
-        kill_switch_path: Path | str = "data/state/PAPER_KILL_SWITCH",
+        kill_switch_path: Path | str | None = None,
         max_price_deviation_pct: float = 20.0,
         reject_on_macro: bool = False,
         invariant_solver: InvariantSolver | None = None,
     ) -> None:
-        self.kill_switch_path = Path(kill_switch_path)
+        resolved_kill_switch = (
+            kill_switch_path
+            or os.environ.get("PAPER_KILL_SWITCH_PATH")
+            or "data/state/PAPER_KILL_SWITCH"
+        )
+        self.kill_switch_path = Path(resolved_kill_switch)
         self.max_price_deviation_pct = max_price_deviation_pct
         self.reject_on_macro = reject_on_macro
         self.invariant_solver = invariant_solver or InvariantSolver()

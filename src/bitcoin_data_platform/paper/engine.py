@@ -11,6 +11,7 @@ from typing import Any
 import duckdb
 import httpx
 
+from bitcoin_data_platform.committee.models import InvestmentMemorandum
 from bitcoin_data_platform.exceptions import MarketDataUnavailableError
 from bitcoin_data_platform.paper.models import (
     PaperPortfolioBalance,
@@ -38,14 +39,17 @@ class PaperTradingEngine:
         portfolio_id: str = "default",
         fee_bps: float = 10.0,  # 10.0 bps = 0.10% Coinbase spot fee
         risk_guard: RiskGuard | None = None,
-        kill_switch_path: Path | str = "data/state/PAPER_KILL_SWITCH",
+        kill_switch_path: Path | str | None = None,
         allow_unpopulated: bool = False,
     ) -> None:
         self.db_path_str = str(db_path)
         self.db_path = Path(db_path) if self.db_path_str != ":memory:" else None
         self.portfolio_id = portfolio_id
         self.fee_bps = fee_bps
-        self.risk_guard = risk_guard or RiskGuard(kill_switch_path=kill_switch_path)
+        resolved_kill_switch = kill_switch_path or (
+            self.db_path.parent / "PAPER_KILL_SWITCH" if self.db_path is not None else None
+        )
+        self.risk_guard = risk_guard or RiskGuard(kill_switch_path=resolved_kill_switch)
         self.allow_unpopulated = allow_unpopulated
 
     def _get_connection(self, read_only: bool = False) -> duckdb.DuckDBPyConnection:
@@ -356,6 +360,7 @@ class PaperTradingEngine:
         trade_date: date,
         daily_budget: float = 10.0,
         force_spot_price: float | None = None,
+        committee_memo: InvestmentMemorandum | dict[str, Any] | None = None,
     ) -> PaperTradeRecord:
         """Advance paper portfolio by executing the systematic DCA strategy for a given day."""
         if daily_budget <= 0.0:
@@ -367,7 +372,7 @@ class PaperTradingEngine:
             force_spot_price=force_spot_price,
         )
 
-        # 1. Determine Proposed Trade Action using DynamicReserveDCAStrategy logic
+        # 1. Determine Proposed Trade Action from Committee Memo or DynamicReserveDCA
         base_slice = daily_budget
         norm_signal = signal_regime.upper().strip()
 
@@ -377,7 +382,37 @@ class PaperTradingEngine:
         reserve_deduction = 0.0
         reserve_addition = 0.0
 
-        if has_macro:
+        memo_target = None
+        memo_action = None
+        if committee_memo is not None:
+            if isinstance(committee_memo, dict):
+                memo_target = committee_memo.get("clamped_allocation_usd")
+                memo_action = committee_memo.get("proposed_action")
+            else:
+                memo_target = getattr(committee_memo, "clamped_allocation_usd", None)
+                act = getattr(committee_memo, "proposed_action", None)
+                memo_action = getattr(act, "value", str(act)) if act is not None else None
+
+        if memo_action == "DATA_UNAVAILABLE" or (memo_target is not None and memo_target <= 0.0):
+            side = "HOLD"
+            gross_amount_usd = 0.0
+            action_desc = memo_action or "DATA_UNAVAILABLE"
+            narrative = f"🛑 KOMITE HALT: Alokasi disetujui $0.00 ({action_desc})."
+        elif memo_target is not None and memo_target > 0.0:
+            # Directly honor Committee clamped allocation
+            gross_amount_usd = min(float(memo_target), portfolio.base_cash + portfolio.reserve_cash)
+            side = "BUY" if gross_amount_usd > 0.0 else "HOLD"
+            # Deduct from base first, then reserve
+            base_buy = min(gross_amount_usd, portfolio.base_cash)
+            rem = gross_amount_usd - base_buy
+            reserve_draw = min(rem, portfolio.reserve_cash)
+            base_deduction = base_buy
+            reserve_deduction = reserve_draw
+            narrative = (
+                f"🏛️ EKSEKUSI KOMITE: Alokasi disetujui ${gross_amount_usd:,.2f} "
+                f"[Base: ${base_buy:,.2f}, Cadangan: ${reserve_draw:,.2f}]."
+            )
+        elif has_macro:
             side = "HOLD"
             gross_amount_usd = 0.0
             reserve_addition = min(base_slice, portfolio.base_cash)

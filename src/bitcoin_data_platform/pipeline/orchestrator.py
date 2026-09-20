@@ -256,6 +256,7 @@ class PipelineOrchestrator:
 
             # Step 5: Investment Committee Deliberation
             t0 = time.monotonic()
+            memo = None
             try:
                 committee = InvestmentCommitteeEngine(self.db, use_llm=True)
                 # In daily pipeline, generate fail-closed memo if marts unpopulated
@@ -289,7 +290,8 @@ class PipelineOrchestrator:
             t0 = time.monotonic()
             try:
                 paper_engine = PaperTradingEngine(db_path=self.db.db_path_str)
-                trade_record = paper_engine.step(trade_date=today_date)
+                # Feed the validated committee memo directly into paper trading step
+                trade_record = paper_engine.step(trade_date=today_date, committee_memo=memo)
                 steps.append(
                     JobStepResult(
                         step_name="paper_trading_execution_step",
