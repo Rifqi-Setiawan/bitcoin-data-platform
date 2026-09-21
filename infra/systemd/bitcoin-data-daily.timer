@@ -1,9 +1,9 @@
 [Unit]
-Description=Run Bitcoin Data Platform Daily Pipeline at 00:05 UTC
+Description=Run Bitcoin Data Platform Daily Pipeline at 00:10 UTC
 Documentation=https://github.com/Rifqi-Setiawan/bitcoin-data-platform
 
 [Timer]
-OnCalendar=*-*-* 00:05:00 UTC
+OnCalendar=*-*-* 00:10:00 UTC
 Persistent=true
 
 [Install]

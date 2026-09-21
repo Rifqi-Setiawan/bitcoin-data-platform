@@ -5,11 +5,16 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from bitcoin_data_platform.committee.engine import InvestmentCommitteeEngine
 from bitcoin_data_platform.exceptions import MarketDataUnavailableError
+from bitcoin_data_platform.ingestion.sync_service import (
+    ingest_candle_windows,
+    promote_market_data,
+)
 from bitcoin_data_platform.macro.feed_ingester import FeedIngester
 from bitcoin_data_platform.macro.sentiment_analyzer import SentimentAnalyzer
 from bitcoin_data_platform.macro.synthesizer import MacroNarrativeSynthesizer
@@ -21,9 +26,11 @@ from bitcoin_data_platform.pipeline.models import (
     PipelineCadence,
     PipelineRunReport,
 )
+from bitcoin_data_platform.sources.coinbase_client import CoinbaseClient
 from bitcoin_data_platform.sources.macro_calendar_client import MacroCalendarClient
 from bitcoin_data_platform.sources.sentiment_client import SentimentClient
 from bitcoin_data_platform.storage.duckdb_manager import DuckDBManager
+from bitcoin_data_platform.window_planner import plan_backfill
 
 logger = logging.getLogger(__name__)
 
@@ -139,10 +146,81 @@ class PipelineOrchestrator:
     # =========================================================================
     # 2. Daily Pipeline (00:05 UTC)
     # =========================================================================
+    def _sync_market_candles(
+        self,
+        now_utc: datetime,
+        client: Any = None,
+        overlap_hours: int = 1,
+    ) -> dict[str, Any]:
+        """Perform automatic watermark-driven incremental candle ingestion and promotion."""
+        raw_dir = self.repo_root / "data" / "raw"
+        curated_dir = self.repo_root / "data" / "curated"
+        watermark = self.db.get_watermark()
+        if watermark is None:
+            raise MarketDataUnavailableError(
+                "No watermark found in database. Run an initial backfill first."
+            )
+
+        start_utc = watermark - timedelta(hours=overlap_hours)
+        end_utc = now_utc.replace(minute=0, second=0, microsecond=0)
+
+        if start_utc >= end_utc:
+            return {
+                "candles_ingested": 0,
+                "rows_promoted": 0,
+                "watermark": str(watermark),
+                "status": "fresh",
+            }
+
+        plan = plan_backfill(start_utc, end_utc, now_utc=now_utc)
+        if not plan.windows:
+            return {
+                "candles_ingested": 0,
+                "rows_promoted": 0,
+                "watermark": str(watermark),
+                "status": "fresh",
+            }
+
+        cb_client = client if client is not None else CoinbaseClient()
+        owns_client = client is None
+        run_id = f"auto_sync_{uuid.uuid4().hex[:12]}"
+        try:
+            exit_code, w_succ, w_fail, c_ing, files_w, err_msg = ingest_candle_windows(
+                cb_client, plan.windows, run_id, raw_dir
+            )
+        finally:
+            if owns_client:
+                cb_client.close()
+
+        if exit_code != 0:
+            raise RuntimeError(f"Incremental candle ingestion failed: {err_msg}")
+
+        code, err, n_env, n_rows, n_parts = promote_market_data(
+            raw_dir, curated_dir, self.db, run_id, now_utc, update_watermark=True
+        )
+        if code != 0:
+            raise RuntimeError(f"Incremental candle promotion failed: {err}")
+
+        new_watermark = self.db.get_watermark() or watermark
+        return {
+            "candles_ingested": c_ing,
+            "rows_promoted": n_rows,
+            "watermark": str(new_watermark),
+            "status": "synced",
+        }
+
     def run_daily(self, target_date: date | None = None) -> PipelineRunReport:
         """Execute daily pipeline (00:05 UTC): MNI, Committee, Paper Step, Memo."""
         started_at = datetime.now(UTC)
-        today_date = target_date or started_at.date()
+        # Canonical business date: at midnight boundary (00:00-00:30 UTC),
+        # evaluate completed day T-1
+        if target_date is not None:
+            business_date = target_date
+        elif started_at.hour == 0 and started_at.minute < 30:
+            business_date = (started_at - timedelta(days=1)).date()
+        else:
+            business_date = started_at.date()
+
         steps: list[JobStepResult] = []
 
         with self.lock_mgr.acquire(PipelineCadence.DAILY):
@@ -151,19 +229,13 @@ class PipelineOrchestrator:
             # Step 1: Incremental Sync (Market Candles & Watermark)
             t0 = time.monotonic()
             try:
-                watermark = self.db.get_watermark()
-                # If watermark is present and Coinbase client is available, verify fresh watermark
-                if watermark is None:
-                    # Fail-closed: require baseline backfill before daily runs
-                    raise MarketDataUnavailableError(
-                        "No watermark found in database. Run an initial backfill first."
-                    )
+                sync_meta = self._sync_market_candles(started_at)
                 steps.append(
                     JobStepResult(
                         step_name="incremental_market_sync",
                         status=JobStatus.SUCCESS,
                         duration_seconds=round(time.monotonic() - t0, 3),
-                        metadata={"watermark": str(watermark)},
+                        metadata=sync_meta,
                     )
                 )
             except Exception as exc:
@@ -231,7 +303,7 @@ class PipelineOrchestrator:
             t0 = time.monotonic()
             try:
                 synthesizer = MacroNarrativeSynthesizer(self.db)
-                mni_report = synthesizer.synthesize_from_db(target_date=today_date)
+                mni_report = synthesizer.synthesize_from_db(target_date=business_date)
                 steps.append(
                     JobStepResult(
                         step_name="synthesize_composite_mni",
@@ -261,7 +333,7 @@ class PipelineOrchestrator:
                 committee = InvestmentCommitteeEngine(self.db, use_llm=True)
                 # In daily pipeline, generate fail-closed memo if marts unpopulated
                 memo = committee.deliberate(
-                    target_date=today_date, dry_run=False, fail_closed_action=True
+                    target_date=business_date, dry_run=False, fail_closed_action=True
                 )
                 steps.append(
                     JobStepResult(
@@ -291,7 +363,7 @@ class PipelineOrchestrator:
             try:
                 paper_engine = PaperTradingEngine(db_path=self.db.db_path_str)
                 # Feed the validated committee memo directly into paper trading step
-                trade_record = paper_engine.step(trade_date=today_date, committee_memo=memo)
+                trade_record = paper_engine.step(trade_date=business_date, committee_memo=memo)
                 steps.append(
                     JobStepResult(
                         step_name="paper_trading_execution_step",

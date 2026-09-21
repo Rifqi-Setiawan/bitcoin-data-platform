@@ -42,6 +42,10 @@ class LockManager:
         self.lock_dir.mkdir(parents=True, exist_ok=True)
         return self.lock_dir / f"pipeline_{cadence.value}.lock"
 
+    def _get_writer_lock_path(self) -> Path:
+        self.lock_dir.mkdir(parents=True, exist_ok=True)
+        return self.lock_dir / "platform_duckdb_writer.lock"
+
     @staticmethod
     def _is_pid_alive(pid: int) -> bool:
         """Check if process with given PID is actively running."""
@@ -58,9 +62,7 @@ class LockManager:
         except OSError:
             return False
 
-    def is_locked(self, cadence: PipelineCadence) -> bool:
-        """Check whether a cadence lock is active, automatically clearing stale locks."""
-        lock_path = self._get_lock_path(cadence)
+    def _is_path_locked(self, lock_path: Path) -> bool:
         if not lock_path.exists():
             return False
 
@@ -80,36 +82,25 @@ class LockManager:
 
         # Process is dead -> stale lock
         logger.warning(
-            "Stale lock detected for %s pipeline (dead PID %d). Auto-healing stale lock.",
-            cadence.value,
+            "Stale lock detected at %s (dead PID %d). Auto-healing stale lock.",
+            lock_path.name,
             pid,
         )
         with contextlib.suppress(Exception):
             lock_path.unlink()
         return False
 
-    @contextmanager
-    def acquire(self, cadence: PipelineCadence) -> Generator[Path, None, None]:
-        """Acquire an exclusive cadence lock, raising ConcurrentRunLockError if busy."""
-        lock_path = self._get_lock_path(cadence)
+    @staticmethod
+    def _read_lock_pid(lock_path: Path) -> int:
+        try:
+            content = lock_path.read_text(encoding="utf-8").strip()
+            data = json.loads(content)
+            return int(data.get("pid", -1))
+        except Exception:
+            return -1
 
-        if self.is_locked(cadence):
-            try:
-                data = json.loads(lock_path.read_text(encoding="utf-8"))
-                pid = int(data.get("pid", -1))
-            except Exception:
-                pid = -1
-            raise ConcurrentRunLockError(cadence=cadence, pid=pid, lock_path=lock_path)
-
-        current_pid = os.getpid()
-        payload = {
-            "cadence": cadence.value,
-            "pid": current_pid,
-            "acquired_at_utc": datetime.now(UTC).isoformat(),
-        }
-
-        # Atomic write
-        tmp_path = lock_path.with_suffix(".tmp")
+    def _write_lock_atomic(self, lock_path: Path, payload: dict[str, Any]) -> None:
+        tmp_path = lock_path.with_suffix(f".{os.getpid()}.tmp")
         try:
             tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             tmp_path.replace(lock_path)
@@ -119,12 +110,46 @@ class LockManager:
                     tmp_path.unlink()
             raise PipelineLockError(f"Failed creating lockfile {lock_path}: {exc}") from exc
 
+    def is_locked(self, cadence: PipelineCadence) -> bool:
+        """Check whether a cadence lock is active, automatically clearing stale locks."""
+        return self._is_path_locked(self._get_lock_path(cadence))
+
+    @contextmanager
+    def acquire(self, cadence: PipelineCadence) -> Generator[Path, None, None]:
+        """Acquire an exclusive cadence lock and global database writer lock."""
+        writer_lock = self._get_writer_lock_path()
+        cadence_lock = self._get_lock_path(cadence)
+
+        # 1. Check global writer lock first
+        if self._is_path_locked(writer_lock):
+            pid = self._read_lock_pid(writer_lock)
+            raise ConcurrentRunLockError(cadence=cadence, pid=pid, lock_path=writer_lock)
+
+        # 2. Check cadence lock
+        if self.is_locked(cadence):
+            pid = self._read_lock_pid(cadence_lock)
+            raise ConcurrentRunLockError(cadence=cadence, pid=pid, lock_path=cadence_lock)
+
+        current_pid = os.getpid()
+        payload = {
+            "cadence": cadence.value,
+            "pid": current_pid,
+            "acquired_at_utc": datetime.now(UTC).isoformat(),
+        }
+
+        # Atomic writes for cadence and global writer locks
+        self._write_lock_atomic(cadence_lock, payload)
+        self._write_lock_atomic(writer_lock, payload)
+
         try:
-            yield lock_path
+            yield cadence_lock
         finally:
             with contextlib.suppress(Exception):
-                if lock_path.exists():
-                    lock_path.unlink()
+                if cadence_lock.exists():
+                    cadence_lock.unlink()
+            with contextlib.suppress(Exception):
+                if writer_lock.exists():
+                    writer_lock.unlink()
 
     def get_status(self) -> dict[str, Any]:
         """Compile status of all pipeline tier locks."""

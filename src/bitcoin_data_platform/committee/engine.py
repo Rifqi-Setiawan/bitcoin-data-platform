@@ -100,7 +100,10 @@ class InvestmentCommitteeEngine:
         if snapshot is None:
             if not effective_allow_unpopulated:
                 if fail_closed_action:
-                    return self._build_data_unavailable_memorandum(target_date, memo_id)
+                    memo = self._build_data_unavailable_memorandum(target_date, memo_id)
+                    if not dry_run:
+                        self.db.insert_investment_memo(memo)
+                    return memo
                 raise MarketDataUnavailableError(
                     f"Market data snapshot unavailable in DuckDB for date {target_date}. "
                     "Analytical marts are unpopulated (fail-closed)."

@@ -109,10 +109,17 @@ def test_pipeline_run_daily_dag(tmp_path: Path, tmp_duckdb: DuckDBManager) -> No
     )
 
     with (
+        patch.object(orchestrator, "_sync_market_candles") as mock_sync,
         patch("bitcoin_data_platform.pipeline.orchestrator.SentimentClient") as mock_sent,
         patch("bitcoin_data_platform.pipeline.orchestrator.MacroCalendarClient") as mock_cal,
         patch("bitcoin_data_platform.pipeline.orchestrator.PaperTradingEngine") as mock_paper,
     ):
+        mock_sync.return_value = {
+            "candles_ingested": 24,
+            "rows_promoted": 24,
+            "watermark": "2026-09-19T23:00:00Z",
+            "status": "synced",
+        }
         mock_sent_inst = MagicMock()
         from bitcoin_data_platform.sources.sentiment_contract import SentimentRecord
 
@@ -221,7 +228,7 @@ def test_systemd_daily_weekly_service_timer_config() -> None:
 
     d_tmr_ini = configparser.ConfigParser(interpolation=None)
     d_tmr_ini.read_file(daily_tmr.open("r", encoding="utf-8"))
-    assert d_tmr_ini["Timer"]["OnCalendar"] == "*-*-* 00:05:00 UTC"
+    assert d_tmr_ini["Timer"]["OnCalendar"] == "*-*-* 00:10:00 UTC"
 
     # Weekly
     weekly_svc = repo_root / "infra" / "systemd" / "bitcoin-data-weekly.service"

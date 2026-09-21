@@ -367,23 +367,34 @@ class PaperTradingEngine:
             raise ValueError(f"daily_budget must be > 0, got {daily_budget}")
 
         portfolio = self.get_portfolio_balance()
-        spot_price, signal_regime, has_macro, narrative = self._query_day_signal_and_price(
-            trade_date=trade_date,
-            force_spot_price=force_spot_price,
-        )
 
-        # 1. Determine Proposed Trade Action from Committee Memo or DynamicReserveDCA
-        base_slice = daily_budget
-        norm_signal = signal_regime.upper().strip()
-
-        gross_amount_usd = 0.0
-        side = "BUY"
-        base_deduction = 0.0
-        reserve_deduction = 0.0
-        reserve_addition = 0.0
-
+        # 1. Resolve committee memorandum (passed in or queried from DuckDB)
         memo_target = None
         memo_action = None
+        if committee_memo is None:
+            con_memo = self._get_connection(read_only=True)
+            try:
+                memo_row = con_memo.execute(
+                    """
+                    SELECT proposed_action, clamped_allocation_usd, executive_summary_id
+                    FROM investment_committee_memos
+                    WHERE memo_date = ?
+                    ORDER BY created_at_utc DESC
+                    LIMIT 1;
+                    """,
+                    [trade_date],
+                ).fetchone()
+                if memo_row:
+                    committee_memo = {
+                        "proposed_action": memo_row[0],
+                        "clamped_allocation_usd": float(memo_row[1]),
+                        "executive_summary_id": memo_row[2],
+                    }
+            except Exception:
+                pass
+            finally:
+                con_memo.close()
+
         if committee_memo is not None:
             if isinstance(committee_memo, dict):
                 memo_target = committee_memo.get("clamped_allocation_usd")
@@ -393,16 +404,61 @@ class PaperTradingEngine:
                 act = getattr(committee_memo, "proposed_action", None)
                 memo_action = getattr(act, "value", str(act)) if act is not None else None
 
+        # 2. Decision-First Safe Abstention (HOLD):
+        # If committee halted with DATA_UNAVAILABLE or <= 0
         if memo_action == "DATA_UNAVAILABLE" or (memo_target is not None and memo_target <= 0.0):
-            side = "HOLD"
-            gross_amount_usd = 0.0
             action_desc = memo_action or "DATA_UNAVAILABLE"
-            narrative = f"🛑 KOMITE HALT: Alokasi disetujui $0.00 ({action_desc})."
-        elif memo_target is not None and memo_target > 0.0:
+            trade_id = f"tr_{uuid.uuid4().hex[:12]}"
+            ref_price = force_spot_price or 0.0
+            if ref_price <= 0.0:
+                try:
+                    con_p = self._get_connection(read_only=True)
+                    r_p = con_p.execute(
+                        "SELECT close FROM mart_btc_usd_daily ORDER BY trade_date_utc DESC LIMIT 1;"
+                    ).fetchone()
+                    if r_p:
+                        ref_price = float(r_p[0])
+                    con_p.close()
+                except Exception:
+                    pass
+
+            portfolio.last_updated_utc = datetime.now(UTC)
+            trade_record = PaperTradeRecord(
+                trade_id=trade_id,
+                portfolio_id=self.portfolio_id,
+                executed_at_utc=datetime.now(UTC),
+                trade_date=trade_date,
+                side="HOLD",
+                signal_regime=action_desc,
+                spot_price=ref_price,
+                gross_amount_usd=0.0,
+                fee_usd=0.0,
+                net_amount_usd=0.0,
+                btc_amount=0.0,
+                narrative=f"🛑 KOMITE HALT: Alokasi disetujui $0.00 ({action_desc}).",
+            )
+            self._persist_trade_and_snapshot(trade_record, portfolio, ref_price)
+            return trade_record
+
+        # 3. For executable orders, query spot price and analytical signal
+        spot_price, signal_regime, has_macro, narrative = self._query_day_signal_and_price(
+            trade_date=trade_date,
+            force_spot_price=force_spot_price,
+        )
+
+        base_slice = daily_budget
+        norm_signal = signal_regime.upper().strip()
+
+        gross_amount_usd = 0.0
+        side = "BUY"
+        base_deduction = 0.0
+        reserve_deduction = 0.0
+        reserve_addition = 0.0
+
+        if memo_target is not None and memo_target > 0.0:
             # Directly honor Committee clamped allocation
             gross_amount_usd = min(float(memo_target), portfolio.base_cash + portfolio.reserve_cash)
             side = "BUY" if gross_amount_usd > 0.0 else "HOLD"
-            # Deduct from base first, then reserve
             base_buy = min(gross_amount_usd, portfolio.base_cash)
             rem = gross_amount_usd - base_buy
             reserve_draw = min(rem, portfolio.reserve_cash)
@@ -521,6 +577,16 @@ class PaperTradingEngine:
         )
 
         # 5. Persist to DuckDB (atomic with snapshot)
+        self._persist_trade_and_snapshot(trade_record, portfolio, spot_price)
+        return trade_record
+
+    def _persist_trade_and_snapshot(
+        self,
+        trade_record: PaperTradeRecord,
+        portfolio: PaperPortfolioBalance,
+        spot_price: float,
+    ) -> None:
+        """Persist trade record, balance updates, and daily snapshot atomically to DuckDB."""
         con = self._get_connection(read_only=False)
         try:
             self._ensure_schema(con)
@@ -585,7 +651,7 @@ class PaperTradingEngine:
             if earliest_snap is not None and float(earliest_snap[0]) > 0.0:
                 p_0 = float(earliest_snap[0])
             else:
-                p_0 = spot_price
+                p_0 = spot_price if spot_price > 0.0 else 65000.0
 
             benchmark_equity = (
                 (portfolio.initial_cash / p_0) * spot_price if p_0 > 0.0 else portfolio.initial_cash
@@ -601,7 +667,7 @@ class PaperTradingEngine:
             )
 
             snapshot = PaperSnapshotRecord(
-                snapshot_date=trade_date,
+                snapshot_date=trade_record.trade_date,
                 portfolio_id=self.portfolio_id,
                 base_cash=portfolio.base_cash,
                 reserve_cash=portfolio.reserve_cash,
@@ -638,8 +704,6 @@ class PaperTradingEngine:
             )
         finally:
             con.close()
-
-        return trade_record
 
     def get_portfolio_summary(self, live_spot_price: float | None = None) -> PaperSummary:
         """Calculate consolidated portfolio performance metrics."""
