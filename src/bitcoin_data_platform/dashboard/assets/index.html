@@ -13,8 +13,13 @@
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <!-- Chart.js CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <!-- Chart.js: Local bundle with CDN fallback -->
+  <script src="/assets/chart.umd.min.js"></script>
+  <script>
+    if (typeof Chart === 'undefined') {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"><\\/script>');
+    }
+  </script>
 
   <script>
     tailwind.config = {
@@ -197,19 +202,19 @@
     <!-- PRIMARY NAVIGATION TABS (MARKET vs PORTFOLIO) -->
     <!-- ========================================== -->
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.08] pb-4">
-      <div class="flex items-center gap-2 p-1 rounded-xl bg-[#12141a] border border-white/[0.06]">
-        <button id="tabMarketBtn" onclick="switchMainTab('market')" class="flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-amber-500 text-zinc-950 shadow-sm transition-all">
+      <div class="flex items-center gap-2 p-1 rounded-xl bg-[#12141a] border border-white/[0.06] overflow-x-auto max-w-full pb-1 sm:pb-1">
+        <button id="tabMarketBtn" onclick="switchMainTab('market')" class="whitespace-nowrap shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-amber-500 text-zinc-950 shadow-sm transition-all">
           <span>📊</span> Ringkasan Pasar
         </button>
-        <button id="tabPortfolioBtn" onclick="switchMainTab('portfolio')" class="flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all">
+        <button id="tabPortfolioBtn" onclick="switchMainTab('portfolio')" class="whitespace-nowrap shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all">
           <span>💼</span> Portofolio Simulasi ($1,000)
           <span class="px-1.5 py-0.5 text-[10px] font-bold rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">FORWARD DCA</span>
         </button>
-        <button id="tabMacroBtn" onclick="switchMainTab('macro')" class="flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all">
+        <button id="tabMacroBtn" onclick="switchMainTab('macro')" class="whitespace-nowrap shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all">
           <span>📡</span> Macro Radar
           <span class="px-1.5 py-0.5 text-[10px] font-bold rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">MNI ENGINE</span>
         </button>
-        <button id="tabCommitteeBtn" onclick="switchMainTab('committee')" class="flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all">
+        <button id="tabCommitteeBtn" onclick="switchMainTab('committee')" class="whitespace-nowrap shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all">
           <span>🏛️</span> Komite Investasi
           <span class="px-1.5 py-0.5 text-[10px] font-bold rounded bg-purple-500/20 text-purple-400 border border-purple-500/30">AI COMMITTEE</span>
         </button>
@@ -1427,7 +1432,14 @@
     let chartInstance = null;
 
     function initChart() {
-      const ctx = document.getElementById('marketChart').getContext('2d');
+      if (typeof Chart === 'undefined') {
+        console.warn('Chart.js not yet loaded, postponing initChart');
+        setTimeout(initChart, 200);
+        return;
+      }
+      const canvas = document.getElementById('marketChart');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
       const dataSet = assetData[currentAsset];
       const series = currentTimeframe === '24H' ? dataSet.chartData24H : dataSet.chartData30D;
 
@@ -1982,8 +1994,8 @@
       const tabMacroBtn = document.getElementById('tabMacroBtn');
       const tabCommitteeBtn = document.getElementById('tabCommitteeBtn');
 
-      const activeClass = 'flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-amber-500 text-zinc-950 shadow-sm transition-all';
-      const inactiveClass = 'flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all';
+      const activeClass = 'whitespace-nowrap shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-amber-500 text-zinc-950 shadow-sm transition-all';
+      const inactiveClass = 'whitespace-nowrap shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-zinc-400 hover:text-white transition-all';
 
       marketView.classList.add('hidden');
       portfolioView.classList.add('hidden');
@@ -2510,7 +2522,7 @@
       document.getElementById('donutBtcVal').textContent = `$${btc.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${btcPct}%)`;
 
       const ctx = document.getElementById('portfolioDonutChart');
-      if (!ctx) return;
+      if (!ctx || typeof Chart === 'undefined') return;
 
       if (!portfolioDonutInstance) {
         portfolioDonutInstance = new Chart(ctx.getContext('2d'), {
@@ -2569,7 +2581,7 @@
 
     function renderPortfolioEquityChart(series) {
       const canvas = document.getElementById('portfolioEquityChart');
-      if (!canvas) return;
+      if (!canvas || typeof Chart === 'undefined') return;
       const ctx = canvas.getContext('2d');
 
       const labels = series.map(d => d.date);

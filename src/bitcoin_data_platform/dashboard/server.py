@@ -1485,6 +1485,10 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
         """Return typed server instance."""
         return cast("DashboardServer", self.server)
 
+    def do_HEAD(self) -> None:  # noqa: N802
+        """Handle HTTP HEAD requests identically to GET without writing response body."""
+        self.do_GET()
+
     def do_GET(self) -> None:  # noqa: N802
         """Handle HTTP GET requests."""
         parsed = urllib.parse.urlparse(self.path)
@@ -1496,6 +1500,8 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
 
         if path in ("/", "/index.html"):
             self._handle_index()
+        elif path.startswith("/assets/"):
+            self._handle_asset(path)
         elif path == "/api/kpi":
             self._handle_kpi(query)
         elif path == "/api/chart":
@@ -1557,6 +1563,29 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_bytes(content, content_type="text/html; charset=utf-8")
         except Exception as exc:
             self._send_json({"error": f"Failed reading template: {exc}"}, status=500)
+
+    def _handle_asset(self, path: str) -> None:
+        """Serve static assets from assets_dir safely."""
+        asset_name = path.replace("/assets/", "").strip()
+        assets_dir = self.dashboard_server.assets_dir.resolve()
+        asset_path = (assets_dir / asset_name).resolve()
+
+        # Security check: prevent path traversal
+        if not asset_path.is_file() or not str(asset_path).startswith(str(assets_dir)):
+            self._send_404(f"Asset not found: {asset_name}")
+            return
+
+        content_type = (
+            "application/javascript; charset=utf-8" if asset_name.endswith(".js") else "text/plain"
+        )
+        if asset_name.endswith(".css"):
+            content_type = "text/css; charset=utf-8"
+
+        try:
+            content = asset_path.read_bytes()
+            self._send_bytes(content, content_type=content_type)
+        except Exception as exc:
+            self._send_json({"error": f"Failed reading asset: {exc}"}, status=500)
 
     def _handle_kpi(self, query: dict[str, list[str]]) -> None:
         """Serve 3 KPI cards metrics with live spot price and synchronized 24h envelope."""
@@ -2191,7 +2220,8 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
             for k, v in extra_headers.items():
                 self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(content)
+        if self.command != "HEAD":
+            self.wfile.write(content)
 
 
 class DashboardServer(http.server.ThreadingHTTPServer):
