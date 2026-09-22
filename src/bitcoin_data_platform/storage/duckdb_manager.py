@@ -603,7 +603,7 @@ class DuckDBManager:
             END AS tx_per_active_address
         FROM mart_btc_usd_daily m
         FULL OUTER JOIN fact_network_metrics_daily n
-            ON m.trade_date_utc = n.metric_date_utc;
+            ON CAST(m.trade_date_utc AS DATE) = CAST(n.metric_date_utc AS DATE);
         """
         con.execute(sql)
 
