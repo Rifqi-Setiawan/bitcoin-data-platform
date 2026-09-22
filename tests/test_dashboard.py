@@ -172,6 +172,17 @@ def test_get_root_dashboard_html(test_server: tuple[DashboardServer, str]) -> No
         assert "Harga Saat Ini (Spot)" in html
         assert "Aktivitas Jaringan Blockchain" in html
 
+    # Verify modular static assets are accessible with correct MIME types
+    status_css, headers_css, content_css = _http_get(f"{base_url}/assets/css/styles.css")
+    assert status_css == 200
+    assert "text/css" in headers_css.get("content-type", "")
+    assert ".live-dot" in content_css.decode("utf-8")
+
+    status_js, headers_js, content_js = _http_get(f"{base_url}/assets/js/app.js")
+    assert status_js == 200
+    assert "application/javascript" in headers_js.get("content-type", "")
+    assert "switchMainTab" in content_js.decode("utf-8")
+
 
 def test_get_kpi_metrics_schema_and_defaults(test_server: tuple[DashboardServer, str]) -> None:
     """Test GET /api/kpi for BTC and ETH metrics and fallbacks."""

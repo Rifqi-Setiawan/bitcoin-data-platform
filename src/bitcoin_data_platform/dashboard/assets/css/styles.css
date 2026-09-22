@@ -1,0 +1,70 @@
+/* Bitcoin Market Hub - Modular Stylesheet */
+
+body {
+  background-color: #090a0d;
+  color: #e4e4e7;
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+.card-border {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.card-border-sub {
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #090a0d;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* Pulse Animation for Live Status Indicators */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.95); }
+}
+
+.live-dot {
+  animation: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Order Tape Flash Animations */
+@keyframes flash-green {
+  0% { background-color: rgba(16, 185, 129, 0.25); }
+  100% { background-color: transparent; }
+}
+
+@keyframes flash-red {
+  0% { background-color: rgba(244, 63, 94, 0.25); }
+  100% { background-color: transparent; }
+}
+
+.flash-buy {
+  animation: flash-green 1.2s ease-out;
+}
+
+.flash-sell {
+  animation: flash-red 1.2s ease-out;
+}

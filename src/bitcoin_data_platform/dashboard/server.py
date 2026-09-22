@@ -1566,20 +1566,36 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_asset(self, path: str) -> None:
         """Serve static assets from assets_dir safely."""
-        asset_name = path.replace("/assets/", "").strip()
+        asset_name = path.removeprefix("/assets/").lstrip("/")
         assets_dir = self.dashboard_server.assets_dir.resolve()
-        asset_path = (assets_dir / asset_name).resolve()
-
-        # Security check: prevent path traversal
-        if not asset_path.is_file() or not str(asset_path).startswith(str(assets_dir)):
+        try:
+            asset_path = (assets_dir / asset_name).resolve()
+        except Exception:
             self._send_404(f"Asset not found: {asset_name}")
             return
 
-        content_type = (
-            "application/javascript; charset=utf-8" if asset_name.endswith(".js") else "text/plain"
-        )
-        if asset_name.endswith(".css"):
+        # Security check: prevent path traversal
+        if not asset_path.is_file() or not asset_path.is_relative_to(assets_dir):
+            self._send_404(f"Asset not found: {asset_name}")
+            return
+
+        content_type = "text/plain; charset=utf-8"
+        if asset_name.endswith((".js", ".mjs")):
+            content_type = "application/javascript; charset=utf-8"
+        elif asset_name.endswith(".css"):
             content_type = "text/css; charset=utf-8"
+        elif asset_name.endswith(".json"):
+            content_type = "application/json; charset=utf-8"
+        elif asset_name.endswith(".svg"):
+            content_type = "image/svg+xml"
+        elif asset_name.endswith(".png"):
+            content_type = "image/png"
+        elif asset_name.endswith(".ico"):
+            content_type = "image/x-icon"
+        elif asset_name.endswith(".woff2"):
+            content_type = "font/woff2"
+        elif asset_name.endswith(".woff"):
+            content_type = "font/woff"
 
         try:
             content = asset_path.read_bytes()
