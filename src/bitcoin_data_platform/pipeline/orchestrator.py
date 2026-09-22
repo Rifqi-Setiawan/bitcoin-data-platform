@@ -89,6 +89,22 @@ class PipelineOrchestrator:
         with self.lock_mgr.acquire(PipelineCadence.HOURLY):
             self.db.initialize()
 
+            # Step 0: Incremental Candle Sync (keeps watermark and hourly charts fresh)
+            t0 = time.monotonic()
+            try:
+                if self.db.get_watermark() is not None:
+                    sync_meta = self._sync_market_candles(started_at)
+                    steps.append(
+                        JobStepResult(
+                            step_name="incremental_market_sync",
+                            status=JobStatus.SUCCESS,
+                            duration_seconds=round(time.monotonic() - t0, 3),
+                            metadata=sync_meta,
+                        )
+                    )
+            except Exception as exc:
+                logger.debug("Hourly incremental sync skipped: %s", exc)
+
             # Step 1: News Ingestion
             t0 = time.monotonic()
             articles = []
@@ -212,14 +228,12 @@ class PipelineOrchestrator:
     def run_daily(self, target_date: date | None = None) -> PipelineRunReport:
         """Execute daily pipeline (00:05 UTC): MNI, Committee, Paper Step, Memo."""
         started_at = datetime.now(UTC)
-        # Canonical business date: at midnight boundary (00:00-00:30 UTC),
-        # evaluate completed day T-1
+        # Canonical business date: daily batch pipeline always evaluates
+        # the most recently completed trading day T-1 unless target_date is specified.
         if target_date is not None:
             business_date = target_date
-        elif started_at.hour == 0 and started_at.minute < 30:
-            business_date = (started_at - timedelta(days=1)).date()
         else:
-            business_date = started_at.date()
+            business_date = (started_at - timedelta(days=1)).date()
 
         steps: list[JobStepResult] = []
 
@@ -275,12 +289,26 @@ class PipelineOrchestrator:
                     )
                 )
 
-            # Step 3: Fetch Macro Calendar (ForexFactory)
+            # Step 3: Fetch Macro Calendar (ForexFactory & MacroAnalyzer releases)
             t0 = time.monotonic()
             try:
                 cal_client = MacroCalendarClient()
                 events = cal_client.fetch_week_events()
                 self.db.insert_macro_events(events)
+
+                # Also populate analyzed macroeconomic releases for the dashboard calendar
+                try:
+                    from bitcoin_data_platform.macro.macro_analyzer import (  # noqa: PLC0415
+                        MacroAnalyzer,
+                    )
+
+                    analyzer = MacroAnalyzer()
+                    releases = analyzer.fetch_and_analyze_calendar()
+                    self.db.create_macro_tables()
+                    self.db.insert_macro_economic_releases(releases)
+                except Exception as exc_cal:
+                    logger.debug("Failed analyzing macro calendar releases: %s", exc_cal)
+
                 steps.append(
                     JobStepResult(
                         step_name="fetch_macro_calendar",

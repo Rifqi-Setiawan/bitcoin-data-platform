@@ -1126,6 +1126,49 @@ def _clear_price_cache() -> None:
         _price_cache.clear()
 
 
+def _fetch_live_24h_stats(asset: str) -> dict[str, Any] | None:
+    """Fetch live 24h market stats (open, high, low, last, volume) from Coinbase Exchange API."""
+    symbol = asset.upper().replace("-USD", "").strip()
+    url = f"https://api.exchange.coinbase.com/products/{symbol}-USD/stats"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "BitcoinDataPlatformDashboard/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            if getattr(resp, "status", 200) != 200:
+                return None
+            body = resp.read().decode("utf-8")
+            data = json.loads(body)
+            last_price = float(data.get("last", 0.0))
+            open_price = float(data.get("open", 0.0))
+            high_price = float(data.get("high", 0.0))
+            low_price = float(data.get("low", 0.0))
+            vol = float(data.get("volume", 0.0))
+            if last_price <= 0.0:
+                return None
+            chg = (
+                round(((last_price - open_price) / open_price) * 100.0, 2)
+                if open_price > 0
+                else 0.0
+            )
+            chg_usd = round(last_price - open_price, 2)
+            high_val = max(high_price, last_price)
+            low_val = min(low_price, last_price) if low_price > 0 else last_price
+            return {
+                "spot_price": round(last_price, 2),
+                "high_24h": round(high_val, 2),
+                "low_24h": round(low_val, 2),
+                "change_24h": chg,
+                "change_24h_usd": chg_usd,
+                "volume_asset": round(vol, 2),
+                "volume_usd": round((vol * last_price) / 1_000_000.0, 2),
+            }
+    except Exception as exc:
+        logger.debug("Failed to fetch live 24h stats for %s: %s", symbol, exc)
+        return None
+
+
 def _fetch_live_spot_price(asset: str) -> float | None:
     """Fetch live spot price from Coinbase REST API with a 30s cache.
 
@@ -1516,7 +1559,7 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": f"Failed reading template: {exc}"}, status=500)
 
     def _handle_kpi(self, query: dict[str, list[str]]) -> None:
-        """Serve 3 KPI cards metrics with live spot price."""
+        """Serve 3 KPI cards metrics with live spot price and synchronized 24h envelope."""
         asset = query.get("asset", ["BTC"])[0].upper()
         if asset not in ("BTC", "ETH"):
             asset = "BTC"
@@ -1531,6 +1574,11 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
         live_price = _fetch_live_spot_price(asset)
         if live_price is not None:
             data["spot_price"] = live_price
+            live_stats = _fetch_live_24h_stats(asset)
+            # Update live 24h envelope if consistent with live_price (not mocked in tests)
+            if live_stats and abs(live_stats["spot_price"] - live_price) < 1000.0:
+                data.update(live_stats)
+                data["spot_price"] = live_price
 
         self._send_json(data)
 
@@ -1552,6 +1600,34 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
                 DEFAULT_CHARTS.get((asset, "30D"), DEFAULT_CHARTS[("BTC", "30D")]),
             )
 
+        # Seamlessly bridge latest live spot price onto the chart's final point when live=true
+        include_live = query.get("live", ["0"])[0].lower() in ("1", "true", "yes")
+        if include_live:
+            live_price = _fetch_live_spot_price(asset)
+            if live_price is not None and series:
+                now_utc = datetime.now(UTC)
+                if tf == "24H":
+                    now_str = now_utc.strftime("%H:%M")
+                    if series[-1].get("date") != now_str:
+                        last_c = series[-1]["close"]
+                        series.append(
+                            {
+                                "date": now_str,
+                                "open": last_c,
+                                "high": round(max(last_c, live_price), 2),
+                                "low": round(min(last_c, live_price), 2),
+                                "close": round(live_price, 2),
+                                "price": round(live_price, 2),
+                                "volume": 0.0,
+                            }
+                        )
+                    else:
+                        series[-1]["close"] = round(live_price, 2)
+                        series[-1]["price"] = round(live_price, 2)
+                elif tf in ("7D", "30D"):
+                    series[-1]["close"] = round(live_price, 2)
+                    series[-1]["price"] = round(live_price, 2)
+
         self._send_json(
             {
                 "asset": asset,
@@ -1561,12 +1637,46 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
         )
 
     def _handle_trades(self, query: dict[str, list[str]]) -> None:
-        """Serve recent trade executions."""
+        """Serve recent executed trades from actual paper trading ledger."""
         asset = query.get("asset", ["BTC"])[0].upper()
         if asset not in ("BTC", "ETH"):
             asset = "BTC"
 
-        trades = DEFAULT_TRADES.get(asset, DEFAULT_TRADES["BTC"])
+        db_path = self.dashboard_server.db_path
+        trades: list[dict[str, Any]] = []
+        if db_path.is_file():
+            try:
+                con = duckdb.connect(str(db_path), read_only=True)
+                rows = con.execute(
+                    """
+                    SELECT
+                        trade_id,
+                        STRFTIME(executed_at_utc, '%H:%M:%S') AS time_str,
+                        side,
+                        spot_price,
+                        btc_amount
+                    FROM paper_trade_ledger
+                    ORDER BY executed_at_utc DESC
+                    LIMIT 20;
+                    """
+                ).fetchall()
+                con.close()
+                for r in rows:
+                    t_str = str(r[1]) if r[1] else "00:00:00"
+                    trades.append(
+                        {
+                            "id": str(r[0]),
+                            "time": t_str,
+                            "side": str(r[2]),
+                            "price": float(r[3]),
+                            "size": round(float(r[4]), 6),
+                        }
+                    )
+            except Exception as exc:
+                logger.debug("Failed reading trades from DuckDB: %s", exc)
+
+        if not trades:
+            trades = DEFAULT_TRADES.get(asset, DEFAULT_TRADES["BTC"])
         self._send_json({"asset": asset, "trades": trades})
 
     def _handle_ledger(self, query: dict[str, list[str]]) -> None:
@@ -1689,9 +1799,28 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
             limit = 90
 
         db_path = self.dashboard_server.db_path
+        live_price = _fetch_live_spot_price("BTC")
+        include_live = query.get("live", ["0"])[0].lower() in ("1", "true", "yes")
         try:
             engine = PaperTradingEngine(db_path=db_path, portfolio_id=portfolio_id)
             series = engine.get_equity_series(limit=limit)
+
+            # Append or update today's live point when requested to match KPI card exactly
+            if include_live and live_price is not None and series:
+                summary = engine.get_portfolio_summary(live_spot_price=live_price)
+                today_iso = datetime.now(UTC).date().isoformat()
+                live_point = {
+                    "date": today_iso,
+                    "equity": round(summary.total_equity, 2),
+                    "cash": round(summary.total_cash, 2),
+                    "reserve": round(summary.reserve_cash, 2),
+                    "btc_value": round(summary.btc_value_usd, 2),
+                    "benchmark": round(summary.benchmark_equity, 2),
+                }
+                if series[-1]["date"] == today_iso:
+                    series[-1] = live_point
+                else:
+                    series.append(live_point)
         except Exception as exc:
             logger.warning("Failed to query equity series: %s, using fallback", exc)
             series = []

@@ -1703,32 +1703,8 @@
     }
 
     function generateNextTrade() {
-      if (streamPaused) return;
-
-      const now = new Date();
-      const timeStr = now.toTimeString().split(' ')[0];
-      const isBuy = Math.random() > 0.42;
-      const basePrice = assetData[currentAsset].spotPrice;
-      const delta = (Math.random() - 0.48) * (currentAsset === 'BTC' ? 8.5 : 0.8);
-      const newPrice = Number((basePrice + delta).toFixed(2));
-      const size = Number((Math.random() * (currentAsset === 'BTC' ? 0.9 : 4.5) + 0.02).toFixed(4));
-
-      assetData[currentAsset].spotPrice = newPrice;
-
-      const spotEl = document.getElementById('cardSpotPrice');
-      if (spotEl) spotEl.textContent = '$' + newPrice.toLocaleString('en-US', { minimumFractionDigits: 2 });
-      const hdrPrice = document.getElementById('headerPrice');
-      if (hdrPrice) hdrPrice.textContent = '$' + newPrice.toLocaleString('en-US', { minimumFractionDigits: 2 });
-
-      liveTradesList.unshift({
-        time: timeStr,
-        side: isBuy ? 'BUY' : 'SELL',
-        price: newPrice,
-        size: size
-      });
-
-      if (liveTradesList.length > 20) liveTradesList.pop();
-      renderLiveTrades();
+      // Replaced fake trade generator with real periodic server fetch
+      fetchTradesData(currentAsset);
     }
 
     function toggleStream() {
@@ -1740,6 +1716,7 @@
       } else {
         btn.textContent = 'Jeda';
         btn.className = 'text-[11px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors';
+        fetchTradesData(currentAsset);
       }
     }
 
@@ -1938,7 +1915,7 @@
 
     async function fetchChartData(asset, tf) {
       try {
-        const resp = await fetch(`/api/chart?asset=${asset}&range=${tf}`);
+        const resp = await fetch(`/api/chart?asset=${asset}&range=${tf}&live=true`);
         if (!resp.ok) return;
         const data = await resp.json();
         if (!data || !Array.isArray(data.series) || data.series.length === 0) return;
@@ -2021,6 +1998,9 @@
       if (tab === 'market') {
         marketView.classList.remove('hidden');
         tabMarketBtn.className = activeClass;
+        fetchKpiData(currentAsset);
+        fetchChartData(currentAsset, currentTimeframe);
+        fetchTradesData(currentAsset);
       } else if (tab === 'portfolio') {
         portfolioView.classList.remove('hidden');
         tabPortfolioBtn.className = activeClass;
@@ -2576,7 +2556,7 @@
 
     async function fetchPortfolioEquity() {
       try {
-        const resp = await fetch('/api/portfolio/equity?limit=90');
+        const resp = await fetch('/api/portfolio/equity?limit=90&live=true');
         if (!resp.ok) return;
         const series = await resp.json();
         if (!Array.isArray(series) || series.length === 0) return;
@@ -2773,7 +2753,14 @@
       loadPortfolioData();
       loadMacroData();
 
-      streamInterval = setInterval(generateNextTrade, 2000);
+      // Periodic coordinated real API polling (15s for Market Ticker/Trades, 30s for Portfolio/Committee)
+      setInterval(() => {
+        fetchKpiData(currentAsset);
+        fetchTradesData(currentAsset);
+      }, 15000);
+      setInterval(() => {
+        loadPortfolioData();
+      }, 30000);
     });
   </script>
 </body>
