@@ -189,6 +189,25 @@ class InvestmentCommitteeEngine:
             snapshot=snapshot,
         )
 
+        # 6b. Semantic Audit via Laya System 1 Guardrail (Non-authoritative check)
+        try:
+            from bitcoin_data_platform.committee.laya_guardrail import LayaCommitteeGuardrail
+            guardrail = LayaCommitteeGuardrail()
+            audit_verdict = guardrail.audit_memorandum(
+                market_regime=snapshot.get("macro_regime", "NEUTRAL_CHOP"),
+                proposed_action=proposed_action.value if hasattr(proposed_action, "value") else str(proposed_action),
+                consensus_score=consensus_score,
+                executive_summary=summary_id,
+                macro_thesis=votes[0].rationale,
+                valuation_thesis=votes[1].rationale,
+                technical_thesis=votes[2].rationale,
+            )
+            if audit_verdict.status != "PASS":
+                summary_id = f"[{audit_verdict.status}: {audit_verdict.explanation}] " + summary_id
+                memo_md = f"> ⚠️ **[LAYA AUDIT: {audit_verdict.status}]** {audit_verdict.explanation}\n\n" + memo_md
+        except Exception:
+            pass
+
         memo = InvestmentMemorandum(
             memo_id=memo_id,
             memo_date=target_date,
