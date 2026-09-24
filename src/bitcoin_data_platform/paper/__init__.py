@@ -8,9 +8,12 @@ from bitcoin_data_platform.paper.models import (
     PaperTradeRecord,
     RiskCheckResult,
 )
+from bitcoin_data_platform.paper.pacing_guard import PacingDecision, PacingGuard
 from bitcoin_data_platform.paper.risk_guard import RiskGuard
 
 __all__ = [
+    "PacingDecision",
+    "PacingGuard",
     "PaperEngineError",
     "PaperPortfolioBalance",
     "PaperSnapshotRecord",

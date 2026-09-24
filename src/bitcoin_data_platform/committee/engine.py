@@ -192,10 +192,14 @@ class InvestmentCommitteeEngine:
         # 6b. Semantic Audit via Laya System 1 Guardrail (Non-authoritative check)
         try:
             from bitcoin_data_platform.committee.laya_guardrail import LayaCommitteeGuardrail
+
             guardrail = LayaCommitteeGuardrail()
+            action_str = (
+                proposed_action.value if hasattr(proposed_action, "value") else str(proposed_action)
+            )
             audit_verdict = guardrail.audit_memorandum(
                 market_regime=snapshot.get("macro_regime", "NEUTRAL_CHOP"),
-                proposed_action=proposed_action.value if hasattr(proposed_action, "value") else str(proposed_action),
+                proposed_action=action_str,
                 consensus_score=consensus_score,
                 executive_summary=summary_id,
                 macro_thesis=votes[0].rationale,
@@ -204,7 +208,10 @@ class InvestmentCommitteeEngine:
             )
             if audit_verdict.status != "PASS":
                 summary_id = f"[{audit_verdict.status}: {audit_verdict.explanation}] " + summary_id
-                memo_md = f"> ⚠️ **[LAYA AUDIT: {audit_verdict.status}]** {audit_verdict.explanation}\n\n" + memo_md
+                audit_header = (
+                    f"> ⚠️ **[LAYA AUDIT: {audit_verdict.status}]** {audit_verdict.explanation}\n\n"
+                )
+                memo_md = audit_header + memo_md
         except Exception:
             pass
 
@@ -437,6 +444,65 @@ class InvestmentCommitteeEngine:
             ),
             votes=votes,
         )
+
+    def record_heartbeat(
+        self,
+        target_date: date,
+        dry_run: bool = False,
+        mni_report: Any = None,
+        reason: str = "CHOP_DAY_NO_TRIGGER",
+    ) -> InvestmentMemorandum:
+        """Record lightweight heartbeat memorandum on chop days without LLM tokens."""
+        memo_id = f"hb_{uuid.uuid4().hex[:12]}"
+        now = datetime.now(UTC)
+        regime = "SIDEWAYS_CHOP"
+        composite_mni = 0.0
+        if mni_report is not None:
+            if hasattr(mni_report, "composite_mni"):
+                composite_mni = float(mni_report.composite_mni)
+            if hasattr(mni_report, "regime"):
+                reg = mni_report.regime
+                regime = reg.value if hasattr(reg, "value") else str(reg)
+
+        memo = InvestmentMemorandum(
+            memo_id=memo_id,
+            memo_date=target_date,
+            created_at_utc=now,
+            market_regime=regime,
+            composite_mni=composite_mni,
+            consensus_score=0.0,
+            executive_summary_id=(
+                "HEARTBEAT: Sideways chop day; LLM deliberation bypassed to conserve tokens."
+            ),
+            macro_thesis=(
+                "Pasar dalam kondisi sideways chop netral. Tidak ada event pemicu makro/drawdown."
+            ),
+            valuation_thesis=(
+                "Metrik valuasi dan on-chain berada dalam batas wajar tanpa deviasi ekstrem."
+            ),
+            technical_thesis=(
+                "Tidak terdeteksi trigger drawdown (-5% 24h / -12% 7d) atau kapitulasi siklus."
+            ),
+            dissenting_opinions="N/A: Sideways chop heartbeat rutin tanpa pemborosan token LLM.",
+            proposed_action=AllocationAction.HEARTBEAT,
+            proposed_allocation_usd=0.0,
+            clamped_allocation_usd=0.0,
+            allocation_clamped=False,
+            clamping_reason=f"PACING_HEARTBEAT: {reason}",
+            risk_guard_passed=True,
+            memo_markdown=(
+                f"# Institutional Investment Committee Memorandum\n\n"
+                f"**DATE:** {target_date.isoformat()}\n"
+                f"**STATUS: HEARTBEAT (LIGHTWEIGHT PACING)**\n"
+                f"**ACTION: {AllocationAction.HEARTBEAT.value}**\n\n"
+                f"Standard sideways chop day without trigger events or cadence requirement.\n"
+                f"LLM deliberation bypassed to conserve API tokens.\n"
+            ),
+            votes=[],
+        )
+        if not dry_run:
+            self.db.insert_investment_memo(memo)
+        return memo
 
     def _load_user_intelligence(self, target_date: date) -> list[dict[str, Any]]:
         """Load active user intelligence records within 72h window of target date."""

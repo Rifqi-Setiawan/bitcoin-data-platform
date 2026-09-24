@@ -82,8 +82,8 @@ def test_api_portfolio_fallback_when_uninitialized(
     assert data["portfolio_id"] == "default"
     assert data["initial_cash"] == 1000.0
     assert data["total_equity"] == 1000.0
-    assert data["base_cash"] == 700.0
-    assert data["reserve_cash"] == 300.0
+    assert data["base_cash"] == 400.0
+    assert data["reserve_cash"] == 600.0
     assert data["btc_balance"] == 0.0
 
 
@@ -94,7 +94,7 @@ def test_api_portfolio_populated(
 
     engine = PaperTradingEngine(db_path=db_file)
     engine.init_portfolio(initial_cash=1000.0)
-    engine.step(trade_date=date(2026, 9, 18), daily_budget=10.0)
+    engine.step(trade_date=date(2026, 9, 18), daily_budget=10.0, execution_mode="MANUAL_FORCE")
 
     with patch(
         "bitcoin_data_platform.dashboard.server._fetch_live_spot_price",
@@ -119,7 +119,7 @@ def test_api_portfolio_equity(
 
     engine = PaperTradingEngine(db_path=db_file)
     engine.init_portfolio(initial_cash=1000.0)
-    engine.step(trade_date=date(2026, 9, 18), daily_budget=10.0)
+    engine.step(trade_date=date(2026, 9, 18), daily_budget=10.0, execution_mode="MANUAL_FORCE")
 
     url = f"{base_url}/api/portfolio/equity?limit=30"
     with urllib.request.urlopen(url) as response:
@@ -143,7 +143,7 @@ def test_api_portfolio_trades(
 
     engine = PaperTradingEngine(db_path=db_file)
     engine.init_portfolio(initial_cash=1000.0)
-    engine.step(trade_date=date(2026, 9, 18), daily_budget=10.0)
+    engine.step(trade_date=date(2026, 9, 18), daily_budget=10.0, execution_mode="MANUAL_FORCE")
 
     url = f"{base_url}/api/portfolio/trades?limit=10"
     with urllib.request.urlopen(url) as response:

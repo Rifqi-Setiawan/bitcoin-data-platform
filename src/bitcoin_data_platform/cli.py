@@ -799,12 +799,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run event-driven backtesting and quantitative benchmarking.",
         description=(
             "Simulate and benchmark systematic investment strategies (Lump Sum, "
-            "Blind DCA, Dynamic Reserve DCA) across historical market cycles."
+            "Blind DCA, Dynamic Reserve DCA, Weekly Batch DCA, Event-Driven Regime DCA) "
+            "across historical market cycles."
         ),
     )
     backtest_parser.add_argument(
         "--strategy",
-        choices=["all", "dynamic-reserve", "blind-dca", "lump-sum"],
+        choices=[
+            "all",
+            "dynamic-reserve",
+            "blind-dca",
+            "lump-sum",
+            "weekly-batch-dca",
+            "event-driven-regime",
+        ],
         default="all",
         help="Strategy to simulate (default: all).",
     )
@@ -1474,6 +1482,7 @@ def main(
             db_manager.create_network_fact_view()
             db_manager.create_cross_domain_mart_view()
             db_manager.create_investment_signals_view()
+            db_manager.create_event_triggers_view()
 
             max_date = max((m.metric_date_utc for m in net_metrics), default=None)
             old_wm = db_manager.get_watermark(pipeline_id="coin_metrics_daily")
@@ -1673,6 +1682,7 @@ def main(
         try:
             inserted = db_manager.insert_sentiment_records(records)
             db_manager.create_investment_signals_view()
+            db_manager.create_event_triggers_view()
         except DuckDBManagerError as exc:
             sys.stderr.write(f"error: database storage failure: {exc}\n")
             return 5
@@ -1711,6 +1721,7 @@ def main(
         try:
             inserted = db_manager.insert_macro_events(events)
             db_manager.create_investment_signals_view()
+            db_manager.create_event_triggers_view()
         except DuckDBManagerError as exc:
             sys.stderr.write(f"error: database storage failure: {exc}\n")
             return 5
@@ -1972,6 +1983,7 @@ def main(
         try:
             with DuckDBManager(db_path=db_path) as db_manager:
                 db_manager.create_investment_signals_view()
+                db_manager.create_event_triggers_view()
         except Exception:
             pass  # Read-only or table already exists
 

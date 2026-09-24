@@ -20,6 +20,8 @@ class TestStrategyType:
         assert StrategyType.LUMP_SUM.value == "lump-sum"
         assert StrategyType.BLIND_DCA.value == "blind-dca"
         assert StrategyType.DYNAMIC_RESERVE.value == "dynamic-reserve"
+        assert StrategyType.WEEKLY_BATCH_DCA.value == "weekly-batch-dca"
+        assert StrategyType.EVENT_DRIVEN_REGIME.value == "event-driven-regime"
 
     def test_from_str_valid(self) -> None:
         assert StrategyType.from_str("lump-sum") == StrategyType.LUMP_SUM
@@ -28,6 +30,10 @@ class TestStrategyType:
         assert StrategyType.from_str("BLIND_DCA") == StrategyType.BLIND_DCA
         assert StrategyType.from_str("dynamic-reserve") == StrategyType.DYNAMIC_RESERVE
         assert StrategyType.from_str("DYNAMIC_RESERVE") == StrategyType.DYNAMIC_RESERVE
+        assert StrategyType.from_str("weekly-batch-dca") == StrategyType.WEEKLY_BATCH_DCA
+        assert StrategyType.from_str("WEEKLY_BATCH_DCA") == StrategyType.WEEKLY_BATCH_DCA
+        assert StrategyType.from_str("event-driven-regime") == StrategyType.EVENT_DRIVEN_REGIME
+        assert StrategyType.from_str("EVENT_DRIVEN_REGIME") == StrategyType.EVENT_DRIVEN_REGIME
 
     def test_from_str_invalid(self) -> None:
         with pytest.raises(ValueError, match="Unknown strategy type"):
@@ -123,6 +129,37 @@ class TestBacktestDayRecord:
     def test_invalid_negative_close_price(self) -> None:
         with pytest.raises(ValueError, match="market_close_usd must be > 0.0"):
             BacktestDayRecord(trade_date=date(2025, 3, 1), market_close_usd=-500.0)
+
+    def test_drawdown_bounds_validation(self) -> None:
+        # Valid drawdown in [-1.0, 0.0]
+        rec = BacktestDayRecord(
+            trade_date=date(2025, 3, 1),
+            market_close_usd=50000.0,
+            drawdown_7d=-0.15,
+            drawdown_30d=-0.25,
+            return_24h=-0.05,
+            is_weekly_cadence_day=True,
+            is_drawdown_event=True,
+            is_regime_capitulation=False,
+            is_regime_froth=False,
+        )
+        assert rec.drawdown_7d == -0.15
+        assert rec.is_drawdown_event is True
+
+        # Invalid positive drawdown
+        with pytest.raises(ValueError, match="drawdown_7d must be in"):
+            BacktestDayRecord(
+                trade_date=date(2025, 3, 1),
+                market_close_usd=50000.0,
+                drawdown_7d=0.05,
+            )
+
+        with pytest.raises(ValueError, match="drawdown_30d must be in"):
+            BacktestDayRecord(
+                trade_date=date(2025, 3, 1),
+                market_close_usd=50000.0,
+                drawdown_30d=-1.5,
+            )
 
 
 class TestDailyPortfolioState:

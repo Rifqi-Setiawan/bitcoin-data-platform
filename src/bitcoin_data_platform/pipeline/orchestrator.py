@@ -225,6 +225,108 @@ class PipelineOrchestrator:
             "status": "synced",
         }
 
+    def check_cadence_or_trigger(
+        self,
+        business_date: date,
+        mni_report: Any = None,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Query mart_btc_event_triggers to check if weekly cadence or trigger event occurred.
+
+        Returns:
+            tuple[bool, dict[str, Any]]: (is_cadence_or_trigger, trigger_metadata)
+        """
+        is_cadence_or_trigger = False
+        reasons: list[str] = []
+        is_weekly = False
+        is_drawdown = False
+        is_capitulation = False
+        is_froth = False
+        black_swan = False
+
+        if mni_report is not None and getattr(mni_report, "black_swan_flag", False):
+            black_swan = True
+            reasons.append("BLACK_SWAN_ALERT")
+            is_cadence_or_trigger = True
+
+        try:
+            triggers = self.db.get_event_triggers(
+                product_id="BTC-USD",
+                start_date=business_date,
+                end_date=business_date,
+            )
+            if triggers:
+                row = triggers[0]
+                is_weekly = bool(row.get("is_weekly_cadence_day", False))
+                is_drawdown = bool(row.get("is_drawdown_event", False))
+                is_capitulation = bool(row.get("is_regime_capitulation", False))
+                is_froth = bool(row.get("is_regime_froth", False))
+
+                # Double check raw metrics if boolean flags not populated
+                r24 = row.get("return_24h")
+                dd7 = row.get("drawdown_7d")
+                if not is_drawdown and (
+                    (r24 is not None and float(r24) <= -0.05)
+                    or (dd7 is not None and float(dd7) <= -0.12)
+                ):
+                    is_drawdown = True
+
+                mvrv = row.get("mvrv_ratio")
+                mayer = row.get("mayer_multiple")
+                if not is_capitulation and (
+                    (mvrv is not None and float(mvrv) < 1.0)
+                    or (mayer is not None and float(mayer) < 0.8)
+                ):
+                    is_capitulation = True
+
+                fng = row.get("fng_value")
+                if not is_froth and (
+                    (
+                        fng is not None
+                        and int(fng) >= 80
+                        and mayer is not None
+                        and float(mayer) >= 2.0
+                    )
+                    or (mvrv is not None and float(mvrv) > 2.5)
+                    or (mayer is not None and float(mayer) > 2.2)
+                ):
+                    is_froth = True
+
+                if is_weekly:
+                    reasons.append("WEEKLY_CADENCE")
+                if is_drawdown:
+                    reasons.append("DRAWDOWN_EVENT")
+                if is_capitulation:
+                    reasons.append("REGIME_CAPITULATION")
+                if is_froth:
+                    reasons.append("REGIME_FROTH")
+
+                is_cadence_or_trigger = (
+                    is_cadence_or_trigger or is_weekly or is_drawdown or is_capitulation or is_froth
+                )
+            else:
+                # Fallback if no triggers view row: Sunday is weekly cadence day
+                if business_date.weekday() == 6:
+                    is_weekly = True
+                    reasons.append("WEEKLY_CADENCE_SUNDAY")
+                    is_cadence_or_trigger = True
+        except Exception as exc:
+            logger.debug("Failed querying mart_btc_event_triggers: %s", exc)
+            if business_date.weekday() == 6:
+                is_weekly = True
+                reasons.append("WEEKLY_CADENCE_SUNDAY")
+                is_cadence_or_trigger = True
+
+        info = {
+            "is_cadence_or_trigger": is_cadence_or_trigger,
+            "is_weekly_cadence_day": is_weekly,
+            "is_drawdown_event": is_drawdown,
+            "is_regime_capitulation": is_capitulation,
+            "is_regime_froth": is_froth,
+            "black_swan_flag": black_swan,
+            "trigger_reasons": reasons,
+        }
+        return is_cadence_or_trigger, info
+
     def run_daily(self, target_date: date | None = None) -> PipelineRunReport:
         """Execute daily pipeline (00:05 UTC): MNI, Committee, Paper Step, Memo."""
         started_at = datetime.now(UTC)
@@ -303,7 +405,7 @@ class PipelineOrchestrator:
                     )
 
                     analyzer = MacroAnalyzer()
-                    releases = analyzer.fetch_and_analyze_calendar()
+                    releases = analyzer.fetch_and_analyze_calendar(client=cal_client)
                     self.db.create_macro_tables()
                     self.db.insert_macro_economic_releases(releases)
                 except Exception as exc_cal:
@@ -329,6 +431,7 @@ class PipelineOrchestrator:
 
             # Step 4: Synthesize 3-Tier MNI
             t0 = time.monotonic()
+            mni_report = None
             try:
                 synthesizer = MacroNarrativeSynthesizer(self.db)
                 mni_report = synthesizer.synthesize_from_db(target_date=business_date)
@@ -354,28 +457,65 @@ class PipelineOrchestrator:
                     )
                 )
 
-            # Step 5: Investment Committee Deliberation
+            # Step 5: Investment Committee Deliberation (Conditional Pacing)
             t0 = time.monotonic()
             memo = None
             try:
-                committee = InvestmentCommitteeEngine(self.db, use_llm=True)
-                # In daily pipeline, generate fail-closed memo if marts unpopulated
-                memo = committee.deliberate(
-                    target_date=business_date, dry_run=False, fail_closed_action=True
+                is_active_trigger, trigger_info = self.check_cadence_or_trigger(
+                    business_date, mni_report=mni_report
                 )
-                steps.append(
-                    JobStepResult(
-                        step_name="investment_committee_deliberation",
-                        status=JobStatus.SUCCESS,
-                        duration_seconds=round(time.monotonic() - t0, 3),
-                        metadata={
-                            "proposed_action": memo.proposed_action.value,
-                            "consensus_score": memo.consensus_score,
-                            "clamped_usd": memo.clamped_allocation_usd,
-                            "is_clamped": memo.allocation_clamped,
-                        },
+
+                if is_active_trigger:
+                    committee = InvestmentCommitteeEngine(self.db, use_llm=True)
+                    # In daily pipeline, generate fail-closed memo if marts unpopulated
+                    memo = committee.deliberate(
+                        target_date=business_date, dry_run=False, fail_closed_action=True
                     )
-                )
+                    steps.append(
+                        JobStepResult(
+                            step_name="investment_committee_deliberation",
+                            status=JobStatus.SUCCESS,
+                            duration_seconds=round(time.monotonic() - t0, 3),
+                            metadata={
+                                "deliberation_invoked": True,
+                                "cadence_or_trigger": True,
+                                "trigger_reasons": trigger_info["trigger_reasons"],
+                                "proposed_action": memo.proposed_action.value,
+                                "consensus_score": memo.consensus_score,
+                                "clamped_usd": memo.clamped_allocation_usd,
+                                "is_clamped": memo.allocation_clamped,
+                                "heartbeat": False,
+                                "tokens_saved": False,
+                            },
+                        )
+                    )
+                else:
+                    # Standard chop day: record lightweight heartbeat without wasting LLM tokens
+                    committee = InvestmentCommitteeEngine(self.db, use_llm=False)
+                    memo = committee.record_heartbeat(
+                        target_date=business_date,
+                        dry_run=False,
+                        mni_report=mni_report,
+                        reason="CHOP_DAY_NO_TRIGGER",
+                    )
+                    steps.append(
+                        JobStepResult(
+                            step_name="investment_committee_deliberation",
+                            status=JobStatus.SUCCESS,
+                            duration_seconds=round(time.monotonic() - t0, 3),
+                            metadata={
+                                "deliberation_invoked": False,
+                                "cadence_or_trigger": False,
+                                "trigger_reasons": [],
+                                "proposed_action": memo.proposed_action.value,
+                                "consensus_score": memo.consensus_score,
+                                "clamped_usd": memo.clamped_allocation_usd,
+                                "is_clamped": memo.allocation_clamped,
+                                "heartbeat": True,
+                                "tokens_saved": True,
+                            },
+                        )
+                    )
             except Exception as exc:
                 steps.append(
                     JobStepResult(

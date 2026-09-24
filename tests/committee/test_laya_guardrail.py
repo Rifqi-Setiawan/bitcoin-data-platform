@@ -1,5 +1,6 @@
-from unittest.mock import patch, MagicMock
-from bitcoin_data_platform.committee.laya_guardrail import LayaCommitteeGuardrail, SemanticAuditVerdict
+from unittest.mock import MagicMock, patch
+
+from bitcoin_data_platform.committee.laya_guardrail import LayaCommitteeGuardrail
 
 
 def test_laya_guardrail_pass_consistent():

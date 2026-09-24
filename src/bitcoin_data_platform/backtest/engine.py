@@ -22,7 +22,9 @@ from bitcoin_data_platform.backtest.strategies import (
     BaseStrategy,
     BlindDCAStrategy,
     DynamicReserveDCAStrategy,
+    EventDrivenRegimeStrategy,
     LumpSumStrategy,
+    WeeklyBatchDCAStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,21 +68,56 @@ class BacktestEngine:
                     "Ensure analytical views are created before running backtests."
                 )
 
-            sql = """
-            SELECT
-                trade_date_utc,
-                market_close_usd,
-                sma_200,
-                mayer_multiple,
-                mvrv_ratio,
-                fng_value,
-                has_high_impact_macro_event,
-                investment_signal
-            FROM mart_btc_investment_signals_daily
-            WHERE (? IS NULL OR CAST(trade_date_utc AS DATE) >= ?)
-              AND (? IS NULL OR CAST(trade_date_utc AS DATE) <= ?)
-            ORDER BY CAST(trade_date_utc AS DATE) ASC
-            """
+            # Check if mart_btc_event_triggers exists
+            trigger_check = (
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_name = 'mart_btc_event_triggers'"
+            )
+            has_triggers = bool(con.execute(trigger_check).fetchall())
+
+            if has_triggers:
+                sql = """
+                SELECT
+                    CAST(m.trade_date_utc AS VARCHAR) AS trade_date_utc,
+                    m.market_close_usd,
+                    m.sma_200,
+                    m.mayer_multiple,
+                    m.mvrv_ratio,
+                    m.fng_value,
+                    m.has_high_impact_macro_event,
+                    m.investment_signal,
+                    t.drawdown_7d,
+                    t.drawdown_30d,
+                    t.return_24h,
+                    t.rolling_peak_7d,
+                    t.rolling_peak_30d,
+                    t.is_weekly_cadence_day,
+                    t.is_drawdown_event,
+                    t.is_regime_capitulation,
+                    t.is_regime_froth
+                FROM mart_btc_investment_signals_daily m
+                LEFT JOIN mart_btc_event_triggers t
+                    ON CAST(m.trade_date_utc AS DATE) = CAST(t.trade_date_utc AS DATE)
+                WHERE (? IS NULL OR CAST(m.trade_date_utc AS DATE) >= ?)
+                  AND (? IS NULL OR CAST(m.trade_date_utc AS DATE) <= ?)
+                ORDER BY CAST(m.trade_date_utc AS DATE) ASC
+                """
+            else:
+                sql = """
+                SELECT
+                    CAST(trade_date_utc AS VARCHAR) AS trade_date_utc,
+                    market_close_usd,
+                    sma_200,
+                    mayer_multiple,
+                    mvrv_ratio,
+                    fng_value,
+                    has_high_impact_macro_event,
+                    investment_signal
+                FROM mart_btc_investment_signals_daily
+                WHERE (? IS NULL OR CAST(trade_date_utc AS DATE) >= ?)
+                  AND (? IS NULL OR CAST(trade_date_utc AS DATE) <= ?)
+                ORDER BY CAST(trade_date_utc AS DATE) ASC
+                """
 
             start_str = start_date.isoformat() if start_date else None
             end_str = end_date.isoformat() if end_date else None
@@ -108,6 +145,16 @@ class BacktestEngine:
                 macro_event = bool(row[6]) if row[6] is not None else False
                 signal = str(row[7]) if row[7] is not None else "STANDARD_DCA"
 
+                dd7 = float(row[8]) if has_triggers and row[8] is not None else None
+                dd30 = float(row[9]) if has_triggers and row[9] is not None else None
+                r24 = float(row[10]) if has_triggers and row[10] is not None else None
+                rp7 = float(row[11]) if has_triggers and row[11] is not None else None
+                rp30 = float(row[12]) if has_triggers and row[12] is not None else None
+                is_weekly = bool(row[13]) if has_triggers and row[13] is not None else None
+                is_dd = bool(row[14]) if has_triggers and row[14] is not None else None
+                is_cap = bool(row[15]) if has_triggers and row[15] is not None else None
+                is_froth = bool(row[16]) if has_triggers and row[16] is not None else None
+
                 records.append(
                     BacktestDayRecord(
                         trade_date=trade_d,
@@ -118,6 +165,15 @@ class BacktestEngine:
                         fng_value=fng,
                         has_high_impact_macro_event=macro_event,
                         investment_signal=signal,
+                        drawdown_7d=dd7,
+                        drawdown_30d=dd30,
+                        return_24h=r24,
+                        rolling_peak_7d=rp7,
+                        rolling_peak_30d=rp30,
+                        is_weekly_cadence_day=is_weekly,
+                        is_drawdown_event=is_dd,
+                        is_regime_capitulation=is_cap,
+                        is_regime_froth=is_froth,
                     )
                 )
 
@@ -156,6 +212,10 @@ class BacktestEngine:
             strategy = BlindDCAStrategy(config)
         elif strategy_type == StrategyType.DYNAMIC_RESERVE:
             strategy = DynamicReserveDCAStrategy(config)
+        elif strategy_type == StrategyType.WEEKLY_BATCH_DCA:
+            strategy = WeeklyBatchDCAStrategy(config)
+        elif strategy_type == StrategyType.EVENT_DRIVEN_REGIME:
+            strategy = EventDrivenRegimeStrategy(config)
         else:
             raise ValueError(f"Unsupported strategy type: {strategy_type}")
 
@@ -317,6 +377,8 @@ class BacktestEngine:
             StrategyType.LUMP_SUM,
             StrategyType.BLIND_DCA,
             StrategyType.DYNAMIC_RESERVE,
+            StrategyType.WEEKLY_BATCH_DCA,
+            StrategyType.EVENT_DRIVEN_REGIME,
         ]:
             results[strat_type] = self.run_strategy(
                 records=sorted_records,

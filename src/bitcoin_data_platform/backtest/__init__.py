@@ -28,7 +28,9 @@ from bitcoin_data_platform.backtest.strategies import (
     BaseStrategy,
     BlindDCAStrategy,
     DynamicReserveDCAStrategy,
+    EventDrivenRegimeStrategy,
     LumpSumStrategy,
+    WeeklyBatchDCAStrategy,
 )
 
 __all__ = [
@@ -40,10 +42,12 @@ __all__ = [
     "BlindDCAStrategy",
     "DailyPortfolioState",
     "DynamicReserveDCAStrategy",
+    "EventDrivenRegimeStrategy",
     "FrequencyType",
     "LumpSumStrategy",
     "StrategyResult",
     "StrategyType",
+    "WeeklyBatchDCAStrategy",
     "compute_cagr",
     "compute_calmar_ratio",
     "compute_drawdowns",

@@ -14,6 +14,8 @@ class StrategyType(str, Enum):
     LUMP_SUM = "lump-sum"
     BLIND_DCA = "blind-dca"
     DYNAMIC_RESERVE = "dynamic-reserve"
+    WEEKLY_BATCH_DCA = "weekly-batch-dca"
+    EVENT_DRIVEN_REGIME = "event-driven-regime"
 
     @classmethod
     def from_str(cls, val: str) -> StrategyType:
@@ -87,6 +89,15 @@ class BacktestDayRecord:
     fng_value: int | None = None
     has_high_impact_macro_event: bool = False
     investment_signal: str | None = None
+    drawdown_7d: float | None = None
+    drawdown_30d: float | None = None
+    return_24h: float | None = None
+    rolling_peak_7d: float | None = None
+    rolling_peak_30d: float | None = None
+    is_weekly_cadence_day: bool | None = None
+    is_drawdown_event: bool | None = None
+    is_regime_capitulation: bool | None = None
+    is_regime_froth: bool | None = None
 
     def __post_init__(self) -> None:
         """Validate day record data constraints."""
@@ -94,6 +105,10 @@ class BacktestDayRecord:
             raise ValueError(
                 f"market_close_usd must be > 0.0, got {self.market_close_usd} on {self.trade_date}"
             )
+        if self.drawdown_7d is not None and (self.drawdown_7d < -1.0 or self.drawdown_7d > 0.0):
+            raise ValueError(f"drawdown_7d must be in [-1.0, 0.0], got {self.drawdown_7d}")
+        if self.drawdown_30d is not None and (self.drawdown_30d < -1.0 or self.drawdown_30d > 0.0):
+            raise ValueError(f"drawdown_30d must be in [-1.0, 0.0], got {self.drawdown_30d}")
 
 
 @dataclass

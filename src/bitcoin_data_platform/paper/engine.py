@@ -19,6 +19,7 @@ from bitcoin_data_platform.paper.models import (
     PaperSummary,
     PaperTradeRecord,
 )
+from bitcoin_data_platform.paper.pacing_guard import PacingGuard
 from bitcoin_data_platform.paper.risk_guard import RiskGuard
 from bitcoin_data_platform.signals.generator import generate_narrative
 from bitcoin_data_platform.time_range import parse_iso_utc
@@ -41,6 +42,8 @@ class PaperTradingEngine:
         risk_guard: RiskGuard | None = None,
         kill_switch_path: Path | str | None = None,
         allow_unpopulated: bool = False,
+        pacing_guard: PacingGuard | None = None,
+        weekly_base_usd: float = 20.0,
     ) -> None:
         self.db_path_str = str(db_path)
         self.db_path = Path(db_path) if self.db_path_str != ":memory:" else None
@@ -51,6 +54,8 @@ class PaperTradingEngine:
         )
         self.risk_guard = risk_guard or RiskGuard(kill_switch_path=resolved_kill_switch)
         self.allow_unpopulated = allow_unpopulated
+        self.weekly_base_usd = weekly_base_usd
+        self.pacing_guard = pacing_guard or PacingGuard(weekly_base_usd=weekly_base_usd)
 
     def _get_connection(self, read_only: bool = False) -> duckdb.DuckDBPyConnection:
         """Create a fresh DuckDB connection with strict UTC timezone."""
@@ -119,6 +124,15 @@ class PaperTradingEngine:
                 btc_amount DOUBLE NOT NULL,
                 narrative VARCHAR NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS paper_pacing_state (
+                portfolio_id VARCHAR PRIMARY KEY,
+                sniper_armed BOOLEAN NOT NULL DEFAULT TRUE,
+                active_drawdown_episode_id VARCHAR,
+                last_weekly_date DATE,
+                last_trade_date DATE,
+                updated_at_utc TIMESTAMPTZ NOT NULL
+            );
             """
         )
 
@@ -129,7 +143,7 @@ class PaperTradingEngine:
     ) -> PaperPortfolioBalance:
         """Initialize or retrieve the paper trading portfolio state.
 
-        Partitions virtual capital into 70% Base Cash and 30% Tactical Reserve Cash.
+        Partitions virtual capital into 40% Base Cash ($400) and 60% Tactical Reserve ($600).
         """
         if initial_cash <= 0.0:
             raise ValueError(f"initial_cash must be > 0, got {initial_cash}")
@@ -162,10 +176,8 @@ class PaperTradingEngine:
                     total_trades=int(existing[7]),
                 )
 
-            base_cash = round(0.70 * initial_cash, 2)
-            reserve_cash = round(0.30 * initial_cash, 2)
-            # Adjust rounding difference to guarantee exact initial_cash sum
-            base_cash = round(initial_cash - reserve_cash, 2)
+            base_cash = round(0.40 * initial_cash, 2)
+            reserve_cash = round(initial_cash - base_cash, 2)
             now_utc = datetime.now(UTC)
 
             balance = PaperPortfolioBalance(
@@ -197,6 +209,16 @@ class PaperTradingEngine:
                     balance.total_trades,
                 ],
             )
+
+            con.execute(
+                """
+                INSERT OR REPLACE INTO paper_pacing_state (
+                    portfolio_id, sniper_armed, active_drawdown_episode_id,
+                    last_weekly_date, last_trade_date, updated_at_utc
+                ) VALUES (?, true, NULL, NULL, NULL, ?);
+                """,
+                [self.portfolio_id, now_utc],
+            )
             return balance
         finally:
             con.close()
@@ -206,6 +228,10 @@ class PaperTradingEngine:
         con = self._get_connection(read_only=False)
         try:
             self._ensure_schema(con)
+            con.execute(
+                "DELETE FROM paper_pacing_state WHERE portfolio_id = ?;",
+                [self.portfolio_id],
+            )
             con.execute(
                 "DELETE FROM paper_trade_ledger WHERE portfolio_id = ?;",
                 [self.portfolio_id],
@@ -256,18 +282,156 @@ class PaperTradingEngine:
             total_trades=int(row[7]),
         )
 
-    def _query_day_signal_and_price(
+    def _get_sniper_armed(self) -> bool:
+        """Fetch current sniper armed state for the portfolio."""
+        con = self._get_connection(read_only=True)
+        try:
+            row = con.execute(
+                "SELECT sniper_armed FROM paper_pacing_state WHERE portfolio_id = ?;",
+                [self.portfolio_id],
+            ).fetchone()
+            if row is not None:
+                return bool(row[0])
+            return True
+        except Exception:
+            return True
+        finally:
+            con.close()
+
+    def _set_sniper_armed(
+        self,
+        sniper_armed: bool,
+        trade_date: date,
+    ) -> None:
+        """Update sniper armed state in paper_pacing_state."""
+        con = self._get_connection(read_only=False)
+        try:
+            self._ensure_schema(con)
+            now_utc = datetime.now(UTC)
+            con.execute(
+                """
+                INSERT OR REPLACE INTO paper_pacing_state (
+                    portfolio_id, sniper_armed, active_drawdown_episode_id,
+                    last_weekly_date, last_trade_date, updated_at_utc
+                ) VALUES (?, ?, NULL, NULL, ?, ?);
+                """,
+                [self.portfolio_id, sniper_armed, trade_date, now_utc],
+            )
+        except Exception as exc:
+            logger.debug("Failed updating paper_pacing_state: %s", exc)
+        finally:
+            con.close()
+
+    def _get_tactical_debits_48h(
+        self,
+        trade_date: date,
+    ) -> float:
+        """Sum gross tactical reserve debits settled in the trailing 48-hour window."""
+        con = self._get_connection(read_only=True)
+        try:
+            row = con.execute(
+                """
+                SELECT COALESCE(SUM(gross_amount_usd), 0.0)
+                FROM paper_trade_ledger
+                WHERE portfolio_id = ?
+                  AND side = 'BUY'
+                  AND signal_regime IN ('SNIPER_DEPLOYMENT', 'AGGRESSIVE_ACCUMULATE')
+                  AND CAST(trade_date AS DATE) >= ? - INTERVAL 2 DAYS
+                  AND CAST(trade_date AS DATE) <= ?;
+                """,
+                [self.portfolio_id, trade_date, trade_date],
+            ).fetchone()
+            return float(row[0]) if row and row[0] is not None else 0.0
+        except Exception:
+            return 0.0
+        finally:
+            con.close()
+
+    def _query_triggers_and_signals(
         self,
         trade_date: date,
         force_spot_price: float | None = None,
-    ) -> tuple[float, str, bool, str]:
-        """Retrieve spot price, signal regime, macro status, and narrative for trade date."""
+    ) -> dict[str, Any]:
+        """Retrieve spot price, signals, and trigger observations for trade date."""
         con = self._get_connection(read_only=True)
         try:
-            # Check if mart_btc_investment_signals_daily exists
-            row = None
+            # Check if mart_btc_event_triggers exists
+            has_triggers = False
             try:
-                row = con.execute(
+                t_check = con.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_name = 'mart_btc_event_triggers';"
+                ).fetchone()
+                has_triggers = t_check is not None
+            except Exception:
+                has_triggers = False
+
+            row = None
+            if has_triggers:
+                try:
+                    row = con.execute(
+                        """
+                        SELECT
+                            COALESCE(t.close, m.market_close_usd) AS spot_price,
+                            m.investment_signal,
+                            COALESCE(m.has_high_impact_macro_event, false) AS has_macro,
+                            COALESCE(t.mayer_multiple, m.mayer_multiple) AS mayer_multiple,
+                            COALESCE(t.mvrv_ratio, m.mvrv_ratio) AS mvrv_ratio,
+                            COALESCE(t.fng_value, m.fng_value) AS fng_value,
+                            t.return_24h,
+                            t.drawdown_7d,
+                            t.drawdown_30d,
+                            t.is_weekly_cadence_day,
+                            t.is_drawdown_event,
+                            t.is_regime_capitulation,
+                            t.is_regime_froth
+                        FROM mart_btc_investment_signals_daily m
+                        LEFT JOIN mart_btc_event_triggers t
+                            ON CAST(m.trade_date_utc AS DATE) = CAST(t.trade_date_utc AS DATE)
+                        WHERE CAST(m.trade_date_utc AS DATE) = ?;
+                        """,
+                        [trade_date],
+                    ).fetchone()
+                except Exception:
+                    row = None
+
+            if row is not None:
+                spot = float(row[0]) if force_spot_price is None else force_spot_price
+                sig = str(row[1]) if row[1] else "STANDARD_DCA"
+                macro = bool(row[2]) if row[2] is not None else False
+                mm = float(row[3]) if row[3] is not None else None
+                mvrv = float(row[4]) if row[4] is not None else None
+                fng = int(row[5]) if row[5] is not None else None
+                r24 = float(row[6]) if row[6] is not None else None
+                dd7 = float(row[7]) if row[7] is not None else None
+                dd30 = float(row[8]) if row[8] is not None else None
+                is_weekly = bool(row[9]) if row[9] is not None else (trade_date.weekday() == 6)
+                is_dd = bool(row[10]) if row[10] is not None else None
+                is_cap = bool(row[11]) if row[11] is not None else None
+                is_froth = bool(row[12]) if row[12] is not None else None
+
+                narrative = generate_narrative(sig, mm, mvrv, fng or 50)
+                return {
+                    "spot_price": spot,
+                    "signal_regime": sig,
+                    "has_macro": macro,
+                    "narrative": narrative,
+                    "mayer_multiple": mm,
+                    "mvrv_ratio": mvrv,
+                    "fng_value": fng,
+                    "return_24h": r24,
+                    "drawdown_7d": dd7,
+                    "drawdown_30d": dd30,
+                    "is_weekly_cadence_day": is_weekly,
+                    "is_drawdown_event": is_dd,
+                    "is_regime_capitulation": is_cap,
+                    "is_regime_froth": is_froth,
+                }
+
+            # Query from mart_btc_investment_signals_daily alone if event_triggers had no row
+            row_signals = None
+            try:
+                row_signals = con.execute(
                     """
                     SELECT market_close_usd, investment_signal, has_high_impact_macro_event,
                            mayer_multiple, mvrv_ratio, fng_value
@@ -277,53 +441,132 @@ class PaperTradingEngine:
                     [trade_date],
                 ).fetchone()
             except Exception:
-                row = None
+                row_signals = None
 
-            # Fallback to mart_btc_usd_daily if view query returned no row
-            if row is None:
+            if row_signals is not None:
+                spot = float(row_signals[0]) if force_spot_price is None else force_spot_price
+                sig = str(row_signals[1]) if row_signals[1] else "STANDARD_DCA"
+                macro = bool(row_signals[2]) if row_signals[2] is not None else False
+                mm = float(row_signals[3]) if row_signals[3] is not None else None
+                mvrv = float(row_signals[4]) if row_signals[4] is not None else None
+                fng = int(row_signals[5]) if row_signals[5] is not None else 50
+
+                prev_close = None
                 try:
-                    fallback_row = con.execute(
+                    p_row = con.execute(
                         """
-                        SELECT close
-                        FROM mart_btc_usd_daily
-                        WHERE CAST(trade_date_utc AS DATE) = ?
+                        SELECT market_close_usd
+                        FROM mart_btc_investment_signals_daily
+                        WHERE CAST(trade_date_utc AS DATE) < ?
                         ORDER BY trade_date_utc DESC LIMIT 1;
                         """,
                         [trade_date],
                     ).fetchone()
+                    if p_row and p_row[0] is not None:
+                        prev_close = float(p_row[0])
                 except Exception:
-                    fallback_row = None
+                    pass
 
-                if fallback_row is not None:
-                    spot = float(fallback_row[0]) if force_spot_price is None else force_spot_price
-                    return (
-                        spot,
-                        "STANDARD_DCA",
-                        False,
-                        "⚪ DCA STANDAR: Berdasarkan data harga harian.",
-                    )
+                r24 = ((spot / prev_close) - 1.0) if prev_close and prev_close > 0 else None
+
+                peak_7d = None
+                try:
+                    peak_row = con.execute(
+                        """
+                        SELECT MAX(market_close_usd)
+                        FROM mart_btc_investment_signals_daily
+                        WHERE CAST(trade_date_utc AS DATE) BETWEEN ? - INTERVAL 6 DAYS AND ?;
+                        """,
+                        [trade_date, trade_date],
+                    ).fetchone()
+                    if peak_row and peak_row[0] is not None:
+                        peak_7d = float(peak_row[0])
+                except Exception:
+                    pass
+
+                dd7 = ((spot / peak_7d) - 1.0) if peak_7d and peak_7d > 0 else 0.0
+
+                narrative = generate_narrative(sig, mm, mvrv, fng)
+                is_weekly = trade_date.weekday() == 6
+                is_dd = (
+                    (r24 is not None and r24 <= -0.05)
+                    or (dd7 <= -0.12)
+                    or (sig == "AGGRESSIVE_ACCUMULATE")
+                )
+                is_cap = (mvrv is not None and mvrv < 1.0) or (mm is not None and mm < 0.8)
+                is_froth = (fng >= 80 and mm is not None and mm >= 2.0) or (sig == "HARD_FREEZE")
+
+                return {
+                    "spot_price": spot,
+                    "signal_regime": sig,
+                    "has_macro": macro,
+                    "narrative": narrative,
+                    "mayer_multiple": mm,
+                    "mvrv_ratio": mvrv,
+                    "fng_value": fng,
+                    "return_24h": r24,
+                    "drawdown_7d": dd7,
+                    "drawdown_30d": dd7,
+                    "is_weekly_cadence_day": is_weekly,
+                    "is_drawdown_event": is_dd,
+                    "is_regime_capitulation": is_cap,
+                    "is_regime_froth": is_froth,
+                }
+
+            # Fallback to mart_btc_usd_daily
+            fallback_row = None
+            try:
+                fallback_row = con.execute(
+                    """
+                    SELECT close
+                    FROM mart_btc_usd_daily
+                    WHERE CAST(trade_date_utc AS DATE) = ?
+                    ORDER BY trade_date_utc DESC LIMIT 1;
+                    """,
+                    [trade_date],
+                ).fetchone()
+            except Exception:
+                fallback_row = None
+
+            if fallback_row is not None:
+                spot = float(fallback_row[0]) if force_spot_price is None else force_spot_price
+                return {
+                    "spot_price": spot,
+                    "signal_regime": "STANDARD_DCA",
+                    "has_macro": False,
+                    "narrative": "⚪ DCA STANDAR: Berdasarkan data harga harian.",
+                    "mayer_multiple": None,
+                    "mvrv_ratio": None,
+                    "fng_value": 50,
+                    "return_24h": None,
+                    "drawdown_7d": None,
+                    "drawdown_30d": None,
+                    "is_weekly_cadence_day": trade_date.weekday() == 6,
+                    "is_drawdown_event": False,
+                    "is_regime_capitulation": False,
+                    "is_regime_froth": False,
+                }
         finally:
             con.close()
 
-        if row is not None:
-            spot = float(row[0]) if force_spot_price is None else force_spot_price
-            signal = str(row[1]) if row[1] else "STANDARD_DCA"
-            macro = bool(row[2]) if row[2] is not None else False
-            mm = float(row[3]) if row[3] is not None else None
-            mvrv = float(row[4]) if row[4] is not None else None
-            fng = int(row[5]) if row[5] is not None else 50
-            narrative = generate_narrative(signal, mm, mvrv, fng)
-            return spot, signal, macro, narrative
-
         if force_spot_price is not None:
-            return (
-                force_spot_price,
-                "STANDARD_DCA",
-                False,
-                "⚪ DCA STANDAR: Eksekusi harga manual (forced spot price).",
-            )
+            return {
+                "spot_price": force_spot_price,
+                "signal_regime": "STANDARD_DCA",
+                "has_macro": False,
+                "narrative": "⚪ DCA STANDAR: Eksekusi harga manual (forced spot price).",
+                "mayer_multiple": None,
+                "mvrv_ratio": None,
+                "fng_value": 50,
+                "return_24h": None,
+                "drawdown_7d": None,
+                "drawdown_30d": None,
+                "is_weekly_cadence_day": trade_date.weekday() == 6,
+                "is_drawdown_event": False,
+                "is_regime_capitulation": False,
+                "is_regime_froth": False,
+            }
 
-        # Analytical marts are unpopulated and no forced price provided
         if not self.allow_unpopulated:
             self.risk_guard.activate_kill_switch(
                 reason=f"Market data unavailable in DuckDB for trade date {trade_date}"
@@ -333,7 +576,7 @@ class PaperTradingEngine:
                 "Trading halted fail-closed and kill switch activated."
             )
 
-        # Fallback to live Coinbase spot ticker ONLY when allow_unpopulated=True is explicitly set
+        # Fallback to live Coinbase spot ticker
         try:
             r = httpx.get(
                 "https://api.exchange.coinbase.com/products/BTC-USD/ticker",
@@ -342,12 +585,24 @@ class PaperTradingEngine:
             )
             if r.status_code == 200:
                 spot = float(r.json()["price"])
-                return (
-                    spot,
-                    "STANDARD_DCA",
-                    False,
-                    f"⚪ DCA STANDAR: Eksekusi harga spot live Coinbase (${spot:,.2f}).",
-                )
+                return {
+                    "spot_price": spot,
+                    "signal_regime": "STANDARD_DCA",
+                    "has_macro": False,
+                    "narrative": (
+                        f"⚪ DCA STANDAR: Eksekusi harga spot live Coinbase (${spot:,.2f})."
+                    ),
+                    "mayer_multiple": None,
+                    "mvrv_ratio": None,
+                    "fng_value": 50,
+                    "return_24h": None,
+                    "drawdown_7d": None,
+                    "drawdown_30d": None,
+                    "is_weekly_cadence_day": trade_date.weekday() == 6,
+                    "is_drawdown_event": False,
+                    "is_regime_capitulation": False,
+                    "is_regime_froth": False,
+                }
         except Exception as ticker_err:
             logger.warning(f"Failed fetching live Coinbase ticker: {ticker_err}")
 
@@ -355,16 +610,34 @@ class PaperTradingEngine:
             f"No market data or spot price available for trade date {trade_date}"
         )
 
+    def _query_day_signal_and_price(
+        self,
+        trade_date: date,
+        force_spot_price: float | None = None,
+    ) -> tuple[float, str, bool, str]:
+        """Retrieve spot price, signal regime, macro status, and narrative for trade date."""
+        data = self._query_triggers_and_signals(trade_date, force_spot_price)
+        return (
+            data["spot_price"],
+            data["signal_regime"],
+            data["has_macro"],
+            data["narrative"],
+        )
+
     def step(
         self,
         trade_date: date,
-        daily_budget: float = 10.0,
+        daily_budget: float = 20.0,
         force_spot_price: float | None = None,
         committee_memo: InvestmentMemorandum | dict[str, Any] | None = None,
+        execution_mode: str = "AUTO",
     ) -> PaperTradeRecord:
-        """Advance paper portfolio by executing the systematic DCA strategy for a given day."""
+        """Advance paper portfolio by executing event-driven pacing strategy or manual order."""
         if daily_budget <= 0.0:
             raise ValueError(f"daily_budget must be > 0, got {daily_budget}")
+
+        if self.risk_guard.is_kill_switch_active():
+            raise PaperEngineError("RiskGuard validation rejected trade: Kill switch active")
 
         portfolio = self.get_portfolio_balance()
 
@@ -405,8 +678,10 @@ class PaperTradingEngine:
                 memo_action = getattr(act, "value", str(act)) if act is not None else None
 
         # 2. Decision-First Safe Abstention (HOLD):
-        # If committee halted with DATA_UNAVAILABLE or <= 0
-        if memo_action == "DATA_UNAVAILABLE" or (memo_target is not None and memo_target <= 0.0):
+        # If committee halted with DATA_UNAVAILABLE or <= 0 (excluding routine heartbeat/pacing)
+        if memo_action not in ("HEARTBEAT", "NO_ACTION") and (
+            memo_action == "DATA_UNAVAILABLE" or (memo_target is not None and memo_target <= 0.0)
+        ):
             action_desc = memo_action or "DATA_UNAVAILABLE"
             trade_id = f"tr_{uuid.uuid4().hex[:12]}"
             ref_price = force_spot_price or 0.0
@@ -440,23 +715,20 @@ class PaperTradingEngine:
             self._persist_trade_and_snapshot(trade_record, portfolio, ref_price)
             return trade_record
 
-        # 3. For executable orders, query spot price and analytical signal
-        spot_price, signal_regime, has_macro, narrative = self._query_day_signal_and_price(
+        # 3. For executable orders, query spot price, analytical signals, and triggers
+        trigger_data = self._query_triggers_and_signals(
             trade_date=trade_date,
             force_spot_price=force_spot_price,
         )
-
-        base_slice = daily_budget
+        spot_price = trigger_data["spot_price"]
+        signal_regime = trigger_data["signal_regime"]
+        has_macro = trigger_data["has_macro"]
+        fng_value = trigger_data.get("fng_value")
+        mayer_multiple = trigger_data.get("mayer_multiple")
         norm_signal = signal_regime.upper().strip()
 
-        gross_amount_usd = 0.0
-        side = "BUY"
-        base_deduction = 0.0
-        reserve_deduction = 0.0
-        reserve_addition = 0.0
-
+        # 4. Committee allocation override (if approved allocation > 0)
         if memo_target is not None and memo_target > 0.0:
-            # Directly honor Committee clamped allocation
             gross_amount_usd = min(float(memo_target), portfolio.base_cash + portfolio.reserve_cash)
             side = "BUY" if gross_amount_usd > 0.0 else "HOLD"
             base_buy = min(gross_amount_usd, portfolio.base_cash)
@@ -468,116 +740,286 @@ class PaperTradingEngine:
                 f"🏛️ EKSEKUSI KOMITE: Alokasi disetujui ${gross_amount_usd:,.2f} "
                 f"[Base: ${base_buy:,.2f}, Cadangan: ${reserve_draw:,.2f}]."
             )
-        elif has_macro:
-            side = "HOLD"
+            risk_result = self.risk_guard.validate_trade(
+                portfolio=portfolio,
+                side=side,
+                gross_amount_usd=gross_amount_usd,
+                spot_price=spot_price,
+                macro_event=has_macro,
+                fng_value=fng_value,
+                mayer_multiple=mayer_multiple,
+            )
+            if not risk_result.allowed:
+                raise PaperEngineError(f"RiskGuard validation rejected trade: {risk_result.reason}")
+
+            fee_rate = self.fee_bps / 10000.0
+            fee_usd = round(gross_amount_usd * fee_rate, 4) if side == "BUY" else 0.0
+            net_amount_usd = gross_amount_usd - fee_usd
+            delta_btc = (
+                (net_amount_usd / spot_price) if (side == "BUY" and spot_price > 0.0) else 0.0
+            )
+
+            portfolio.base_cash = round(max(0.0, portfolio.base_cash - base_deduction), 2)
+            portfolio.reserve_cash = round(max(0.0, portfolio.reserve_cash - reserve_deduction), 2)
+            portfolio.btc_balance = round(portfolio.btc_balance + delta_btc, 8)
+            portfolio.last_updated_utc = datetime.now(UTC)
+            if side == "BUY" and gross_amount_usd > 0.0:
+                portfolio.total_trades += 1
+
+            trade_id = f"tr_{uuid.uuid4().hex[:12]}"
+            trade_record = PaperTradeRecord(
+                trade_id=trade_id,
+                portfolio_id=self.portfolio_id,
+                executed_at_utc=datetime.now(UTC),
+                trade_date=trade_date,
+                side=side,
+                signal_regime=norm_signal,
+                spot_price=spot_price,
+                gross_amount_usd=gross_amount_usd,
+                fee_usd=fee_usd,
+                net_amount_usd=net_amount_usd,
+                btc_amount=delta_btc,
+                narrative=narrative,
+            )
+            self._persist_trade_and_snapshot(trade_record, portfolio, spot_price)
+            return trade_record
+
+        # 5. Manual Force execution mode (Operator override)
+        if execution_mode == "MANUAL_FORCE":
+            base_slice = daily_budget
             gross_amount_usd = 0.0
-            reserve_addition = min(base_slice, portfolio.base_cash)
-            base_deduction = reserve_addition
-            narrative = (
-                f"🛑 JEDA MAKRO: Event makro USD dampak tinggi, "
-                f"${reserve_addition:,.2f} dialihkan ke cadangan taktis."
-            )
-        elif norm_signal == "HARD_FREEZE":
-            side = "HOLD"
-            gross_amount_usd = 0.0
-            reserve_addition = min(base_slice, portfolio.base_cash)
-            base_deduction = reserve_addition
-            narrative = (
-                f"🔴 HENTIKAN PEMBELIAN: Pasar terlalu panas, "
-                f"${reserve_addition:,.2f} dialihkan ke cadangan taktis."
-            )
-        elif norm_signal == "DEFENSIVE_RESERVE":
-            target_buy = 0.5 * base_slice
-            target_reserve = 0.5 * base_slice
-            actual_buy = min(target_buy, portfolio.base_cash)
-            avail_after_buy = max(0.0, portfolio.base_cash - actual_buy)
-            actual_reserve = min(target_reserve, avail_after_buy)
+            side = "BUY"
+            base_deduction = 0.0
+            reserve_deduction = 0.0
+            reserve_addition = 0.0
 
-            gross_amount_usd = actual_buy
-            base_deduction = actual_buy + actual_reserve
-            reserve_addition = actual_reserve
-            side = "BUY" if gross_amount_usd > 0.0 else "HOLD"
-            narrative = (
-                f"🟡 CADANGAN DEFENSIF: Beli ${gross_amount_usd:,.2f} (0.5x), "
-                f"${actual_reserve:,.2f} dialihkan ke cadangan."
-            )
-        elif norm_signal == "AGGRESSIVE_ACCUMULATE":
-            base_target = 2.0 * base_slice
-            base_buy = min(base_target, portfolio.base_cash)
-            reserve_draw = min(0.25 * portfolio.reserve_cash, portfolio.reserve_cash)
+            if has_macro:
+                side = "HOLD"
+                gross_amount_usd = 0.0
+                reserve_addition = min(base_slice, portfolio.base_cash)
+                base_deduction = reserve_addition
+                narrative = (
+                    f"🛑 JEDA MAKRO: Event makro USD dampak tinggi, "
+                    f"${reserve_addition:,.2f} dialihkan ke cadangan taktis."
+                )
+            elif norm_signal == "HARD_FREEZE":
+                side = "HOLD"
+                gross_amount_usd = 0.0
+                reserve_addition = min(base_slice, portfolio.base_cash)
+                base_deduction = reserve_addition
+                narrative = (
+                    f"🔴 HENTIKAN PEMBELIAN: Pasar terlalu panas, "
+                    f"${reserve_addition:,.2f} dialihkan ke cadangan taktis."
+                )
+            elif norm_signal == "DEFENSIVE_RESERVE":
+                target_buy = 0.5 * base_slice
+                target_reserve = 0.5 * base_slice
+                actual_buy = min(target_buy, portfolio.base_cash)
+                avail_after_buy = max(0.0, portfolio.base_cash - actual_buy)
+                actual_reserve = min(target_reserve, avail_after_buy)
+                gross_amount_usd = actual_buy
+                base_deduction = actual_buy + actual_reserve
+                reserve_addition = actual_reserve
+                side = "BUY" if gross_amount_usd > 0.0 else "HOLD"
+                narrative = (
+                    f"🟡 CADANGAN DEFENSIF: Beli ${gross_amount_usd:,.2f} (0.5x), "
+                    f"${actual_reserve:,.2f} dialihkan ke cadangan."
+                )
+            elif norm_signal == "AGGRESSIVE_ACCUMULATE":
+                base_target = 2.0 * base_slice
+                base_buy = min(base_target, portfolio.base_cash)
+                reserve_draw = min(0.25 * portfolio.reserve_cash, portfolio.reserve_cash)
+                gross_amount_usd = base_buy + reserve_draw
+                base_deduction = base_buy
+                reserve_deduction = reserve_draw
+                side = "BUY" if gross_amount_usd > 0.0 else "HOLD"
+                narrative = (
+                    f"🟢 AKUMULASI AGRESIF: Beli ${gross_amount_usd:,.2f} "
+                    f"(2.0x base + 25% cadangan). "
+                    f"[Base: ${base_buy:,.2f}, Cadangan: ${reserve_draw:,.2f}]"
+                )
+            elif norm_signal == "OPPORTUNISTIC_ACCUMULATE":
+                target_buy = 1.3 * base_slice
+                gross_amount_usd = min(target_buy, portfolio.base_cash)
+                base_deduction = gross_amount_usd
+                side = "BUY" if gross_amount_usd > 0.0 else "HOLD"
+                narrative = f"🔵 AKUMULASI OPORTUNISTIK: Beli ${gross_amount_usd:,.2f} (1.3x base)."
+            else:
+                target_buy = 1.0 * base_slice
+                gross_amount_usd = min(target_buy, portfolio.base_cash)
+                base_deduction = gross_amount_usd
+                side = "BUY" if gross_amount_usd > 0.0 else "HOLD"
+                narrative = f"⚪ DCA STANDAR: Beli ${gross_amount_usd:,.2f} (1.0x base)."
 
-            gross_amount_usd = base_buy + reserve_draw
-            base_deduction = base_buy
-            reserve_deduction = reserve_draw
-            side = "BUY" if gross_amount_usd > 0.0 else "HOLD"
-            narrative = (
-                f"🟢 AKUMULASI AGRESIF: Beli ${gross_amount_usd:,.2f} (2.0x base + 25% cadangan). "
-                f"[Base: ${base_buy:,.2f}, Cadangan: ${reserve_draw:,.2f}]"
+            risk_result = self.risk_guard.validate_trade(
+                portfolio=portfolio,
+                side=side,
+                gross_amount_usd=gross_amount_usd,
+                spot_price=spot_price,
+                macro_event=has_macro,
+                fng_value=fng_value,
+                mayer_multiple=mayer_multiple,
             )
-        elif norm_signal == "OPPORTUNISTIC_ACCUMULATE":
-            target_buy = 1.3 * base_slice
-            gross_amount_usd = min(target_buy, portfolio.base_cash)
-            base_deduction = gross_amount_usd
-            side = "BUY" if gross_amount_usd > 0.0 else "HOLD"
-            narrative = f"🔵 AKUMULASI OPORTUNISTIK: Beli ${gross_amount_usd:,.2f} (1.3x base)."
-        else:
-            # STANDARD_DCA default
-            target_buy = 1.0 * base_slice
-            gross_amount_usd = min(target_buy, portfolio.base_cash)
-            base_deduction = gross_amount_usd
-            side = "BUY" if gross_amount_usd > 0.0 else "HOLD"
-            narrative = f"⚪ DCA STANDAR: Beli ${gross_amount_usd:,.2f} (1.0x base)."
+            if not risk_result.allowed:
+                raise PaperEngineError(f"RiskGuard validation rejected trade: {risk_result.reason}")
 
-        # 2. Risk Guard Verification
+            fee_rate = self.fee_bps / 10000.0
+            fee_usd = round(gross_amount_usd * fee_rate, 4) if side == "BUY" else 0.0
+            net_amount_usd = gross_amount_usd - fee_usd
+            delta_btc = (
+                (net_amount_usd / spot_price) if (side == "BUY" and spot_price > 0.0) else 0.0
+            )
+
+            portfolio.base_cash = round(max(0.0, portfolio.base_cash - base_deduction), 2)
+            portfolio.reserve_cash = round(
+                max(0.0, portfolio.reserve_cash - reserve_deduction + reserve_addition), 2
+            )
+            portfolio.btc_balance = round(portfolio.btc_balance + delta_btc, 8)
+            portfolio.last_updated_utc = datetime.now(UTC)
+            if side == "BUY" and gross_amount_usd > 0.0:
+                portfolio.total_trades += 1
+
+            trade_id = f"tr_{uuid.uuid4().hex[:12]}"
+            trade_record = PaperTradeRecord(
+                trade_id=trade_id,
+                portfolio_id=self.portfolio_id,
+                executed_at_utc=datetime.now(UTC),
+                trade_date=trade_date,
+                side=side,
+                signal_regime=norm_signal,
+                spot_price=spot_price,
+                gross_amount_usd=gross_amount_usd,
+                fee_usd=fee_usd,
+                net_amount_usd=net_amount_usd,
+                btc_amount=delta_btc,
+                narrative=narrative,
+            )
+            self._persist_trade_and_snapshot(trade_record, portfolio, spot_price)
+            return trade_record
+
+        # 6. AUTO Execution Mode (Event-Driven Regime Pacing with PacingGuard)
+        sniper_armed = self._get_sniper_armed()
+        tactical_debits_48h = self._get_tactical_debits_48h(trade_date)
+
+        decision, new_sniper_armed = self.pacing_guard.evaluate(
+            trade_date=trade_date,
+            base_cash=portfolio.base_cash,
+            reserve_cash=portfolio.reserve_cash,
+            sniper_armed=sniper_armed,
+            return_24h=trigger_data.get("return_24h"),
+            drawdown_7d=trigger_data.get("drawdown_7d"),
+            drawdown_30d=trigger_data.get("drawdown_30d"),
+            mvrv_ratio=trigger_data.get("mvrv_ratio"),
+            prev_mvrv_ratio=trigger_data.get("prev_mvrv_ratio"),
+            mayer_multiple=trigger_data.get("mayer_multiple"),
+            prev_mayer_multiple=trigger_data.get("prev_mayer_multiple"),
+            fng_value=fng_value,
+            is_weekly_cadence_day=trigger_data.get("is_weekly_cadence_day"),
+            has_high_impact_macro_event=has_macro,
+            investment_signal=norm_signal,
+            is_drawdown_event=trigger_data.get("is_drawdown_event"),
+            is_regime_capitulation=trigger_data.get("is_regime_capitulation"),
+            is_regime_froth=trigger_data.get("is_regime_froth"),
+            tactical_debits_48h=tactical_debits_48h,
+            execution_mode="AUTO",
+            manual_budget=daily_budget if daily_budget != 20.0 else None,
+        )
+
+        trade_id = f"tr_{uuid.uuid4().hex[:12]}"
+        portfolio.last_updated_utc = datetime.now(UTC)
+
+        # 6A. Sideways Chop (NO_ACTION) - Zero execution, zero fee, zero cash burn
+        if decision.action == "NO_ACTION":
+            trade_record = PaperTradeRecord(
+                trade_id=trade_id,
+                portfolio_id=self.portfolio_id,
+                executed_at_utc=datetime.now(UTC),
+                trade_date=trade_date,
+                side="NO_ACTION",
+                signal_regime="NO_ACTION",
+                spot_price=spot_price,
+                gross_amount_usd=0.0,
+                fee_usd=0.0,
+                net_amount_usd=0.0,
+                btc_amount=0.0,
+                narrative=decision.narrative,
+            )
+            self._persist_trade_and_snapshot(trade_record, portfolio, spot_price)
+            self._set_sniper_armed(new_sniper_armed, trade_date)
+            return trade_record
+
+        # 6B. HOLD (Froth Freeze or Hard Safety)
+        if decision.action == "HOLD":
+            trade_record = PaperTradeRecord(
+                trade_id=trade_id,
+                portfolio_id=self.portfolio_id,
+                executed_at_utc=datetime.now(UTC),
+                trade_date=trade_date,
+                side="HOLD",
+                signal_regime=decision.state.value,
+                spot_price=spot_price,
+                gross_amount_usd=0.0,
+                fee_usd=0.0,
+                net_amount_usd=0.0,
+                btc_amount=0.0,
+                narrative=decision.narrative,
+            )
+            self._persist_trade_and_snapshot(trade_record, portfolio, spot_price)
+            self._set_sniper_armed(new_sniper_armed, trade_date)
+            return trade_record
+
+        # 6C. BUY (SNIPER_DEPLOYMENT or WEEKLY_CORE)
+        gross_amount_usd = decision.authorized_amount_usd
+        side = "BUY" if gross_amount_usd > 0.0 else "HOLD"
+        pool_str = decision.pool.value
+        is_sniper = decision.is_sniper
+
         risk_result = self.risk_guard.validate_trade(
             portfolio=portfolio,
             side=side,
             gross_amount_usd=gross_amount_usd,
             spot_price=spot_price,
             macro_event=has_macro,
+            is_sniper=is_sniper,
+            pool=pool_str,
+            tactical_debits_48h=tactical_debits_48h,
+            weekly_base_usd=self.weekly_base_usd,
+            fng_value=fng_value,
+            mayer_multiple=mayer_multiple,
         )
-
         if not risk_result.allowed:
             raise PaperEngineError(f"RiskGuard validation rejected trade: {risk_result.reason}")
 
-        # 3. Apply Balances and Fee Deductions
-        fee_rate = self.fee_bps / 10000.0  # e.g. 10.0 bps = 0.0010 (0.10%)
+        fee_rate = self.fee_bps / 10000.0  # 10 bps
         fee_usd = round(gross_amount_usd * fee_rate, 4) if side == "BUY" else 0.0
         net_amount_usd = gross_amount_usd - fee_usd
         delta_btc = (net_amount_usd / spot_price) if (side == "BUY" and spot_price > 0.0) else 0.0
 
-        portfolio.base_cash = round(
-            max(0.0, portfolio.base_cash - base_deduction),
-            2,
-        )
-        portfolio.reserve_cash = round(
-            max(0.0, portfolio.reserve_cash - reserve_deduction + reserve_addition),
-            2,
-        )
+        if is_sniper or pool_str in ("00_TACTICAL_RESERVE", "TACTICAL_RESERVE"):
+            portfolio.reserve_cash = round(max(0.0, portfolio.reserve_cash - gross_amount_usd), 2)
+        else:
+            portfolio.base_cash = round(max(0.0, portfolio.base_cash - gross_amount_usd), 2)
+
         portfolio.btc_balance = round(portfolio.btc_balance + delta_btc, 8)
-        portfolio.last_updated_utc = datetime.now(UTC)
         if side == "BUY" and gross_amount_usd > 0.0:
             portfolio.total_trades += 1
 
-        # 4. Generate Trade Record
-        trade_id = f"tr_{uuid.uuid4().hex[:12]}"
         trade_record = PaperTradeRecord(
             trade_id=trade_id,
             portfolio_id=self.portfolio_id,
             executed_at_utc=datetime.now(UTC),
             trade_date=trade_date,
             side=side,
-            signal_regime=norm_signal,
+            signal_regime=decision.state.value,
             spot_price=spot_price,
             gross_amount_usd=gross_amount_usd,
             fee_usd=fee_usd,
             net_amount_usd=net_amount_usd,
             btc_amount=delta_btc,
-            narrative=narrative,
+            narrative=decision.narrative,
         )
-
-        # 5. Persist to DuckDB (atomic with snapshot)
         self._persist_trade_and_snapshot(trade_record, portfolio, spot_price)
+        self._set_sniper_armed(new_sniper_armed, trade_date)
         return trade_record
 
     def _persist_trade_and_snapshot(

@@ -32,7 +32,8 @@ The platform employs a two-tier storage and modeling architecture:
 12. [Forward Paper Trading Tables](#12-forward-paper-trading-tables)
 13. [Phase 16: Macro & Narrative Intelligence Tables & Marts](#13-phase-16-macro--narrative-intelligence-tables--marts)
 14. [Phase 17: Agentic Investment Committee & User Intelligence Tables & Marts](#14-phase-17-agentic-investment-committee--user-intelligence-tables--marts)
-15. [Type System & Serialization Conventions](#15-type-system--serialization-conventions)
+15. [Phase 18: Event-Driven Regime Pacing Triggers & Rolling Drawdowns](#145-mart_btc_event_triggers-analytical-view)
+16. [Type System & Serialization Conventions](#15-type-system--serialization-conventions)
 
 ---
 
@@ -60,6 +61,7 @@ The platform employs a two-tier storage and modeling architecture:
 | `investment_committee_memos` | Decision & Audit | 1 daily memorandum | `memo_id` | DuckDB Table |
 | `investment_committee_votes` | Decision & Audit | 1 vote per persona per memo | `vote_id` | DuckDB Table |
 | `mart_committee_deliberation_daily` | Analytical Mart | 1 UTC day | `trade_date_utc` | DuckDB SQL View |
+| `mart_btc_event_triggers` | Analytical Mart | 1 UTC day per product | `(product_id, trade_date_utc)` | DuckDB SQL View |
 
 ---
 
@@ -116,6 +118,14 @@ Aggregated analytical mart summarizing 24-hour trading activity for BTC-USD acro
 | `volume_base` | `DECIMAL(38,18)` | No | Total daily traded volume in Bitcoin (`SUM(volume_base)`). |
 | `observed_hour_count` | `BIGINT` | No | Number of distinct hourly candles present in the calendar day (`COUNT(*)`). |
 | `is_complete` | `BOOLEAN` | No | `TRUE` if `observed_hour_count = 24`, indicating full daily coverage; otherwise `FALSE`. |
+| `observed_at_utc` | `TIMESTAMPTZ` | Yes | End timestamp of the latest observed hourly candle in the day (`MAX(candle_start_utc + INTERVAL 1 HOUR)`). |
+| `rolling_peak_7d` | `DECIMAL(38,18)` | Yes | Highest daily `high` in the trailing 7-day window `[t-6, t]`. |
+| `rolling_peak_30d` | `DECIMAL(38,18)` | Yes | Highest daily `high` in the trailing 30-day window `[t-29, t]`. |
+| `sample_count_7d` | `BIGINT` | No | Count of daily rows present in the trailing 7-day window. |
+| `sample_count_30d` | `BIGINT` | No | Count of daily rows present in the trailing 30-day window. |
+| `drawdown_7d` | `DOUBLE` | No | 7-day rolling peak-to-trough drawdown in `[-1.0, 0.0]` (`close / rolling_peak_7d - 1`). |
+| `drawdown_30d` | `DOUBLE` | No | 30-day rolling peak-to-trough drawdown in `[-1.0, 0.0]` (`close / rolling_peak_30d - 1`). |
+| `return_24h` | `DOUBLE` | Yes | 24-hour inter-day close-to-close return (`close_t / close_(t-1) - 1`), or `NULL` if previous day is absent. |
 
 ---
 
@@ -631,6 +641,45 @@ Unified conformed analytical serving view joining daily market prices, on-chain 
 | `risk_guard_passed` | `BOOLEAN` | Yes | Pre-trade RiskGuard gatekeeper pass status. |
 | `executive_summary_id` | `VARCHAR` | Yes | Localized Bahasa Indonesia executive summary. |
 | `active_user_alpha_count` | `BIGINT` | No | Count of active user intelligence notes effective on date. |
+
+### 14.5 mart_btc_event_triggers (Analytical View)
+
+#### Description
+Canonical analytical trigger view serving Phase 18 deterministic finite-state machine (FSM) regime pacing and asymmetric drawdown sniper execution. Exposes trailing drawdowns, 24-hour return, Sunday weekly cadence, and crossing predicates distinguishing threshold entry from persistent levels.
+
+- **Layer**: Curated Analytical Mart View (Event-Driven Pacing Domain)
+- **Physical Location**: `data/state/platform.duckdb`
+- **Base Tables/Views**: `mart_btc_usd_daily`, `fact_network_metrics_daily`, `raw_crypto_sentiment_daily`
+- **Grain**: 1 row per UTC calendar day per product
+
+| Column Name | Data Type | Nullable | Description & Business Rules |
+| :--- | :--- | :--- | :--- |
+| `product_id` | `VARCHAR` | No | Trading pair identifier (`BTC-USD`). |
+| `trade_date_utc` | `DATE` | No | Calendar trade date in UTC. |
+| `observed_at_utc` | `TIMESTAMPTZ` | No | Timestamp representing upstream observation time / freshness evidence. |
+| `close` | `DOUBLE` | No | Daily closing price in USD. |
+| `return_24h` | `DOUBLE` | Yes | 24-hour inter-day close-to-close return (`close_t / close_(t-1) - 1`). |
+| `rolling_peak_7d` | `DOUBLE` | No | Trailing 7-day high peak in USD. |
+| `rolling_peak_30d` | `DOUBLE` | No | Trailing 30-day high peak in USD. |
+| `drawdown_7d` | `DOUBLE` | No | Trailing 7-day peak-to-trough drawdown in `[-1.0, 0.0]`. |
+| `drawdown_30d` | `DOUBLE` | No | Trailing 30-day peak-to-trough drawdown in `[-1.0, 0.0]`. |
+| `mvrv_ratio` | `DOUBLE` | Yes | On-chain Market Value to Realized Value ratio from Coin Metrics. |
+| `mayer_multiple` | `DOUBLE` | Yes | Mayer Multiple valuation metric (`close / sma_200`). |
+| `fng_value` | `INTEGER` | Yes | Daily Crypto Fear & Greed Index score (0 to 100). |
+| `is_weekly_cadence_day` | `BOOLEAN` | No | `TRUE` if `DAYOFWEEK(trade_date_utc) = 0` (Sunday UTC), indicating scheduled weekly base accumulation day. |
+| `is_drawdown_event` | `BOOLEAN` | No | `TRUE` if `return_24h <= -0.05` OR `drawdown_7d <= -0.12`. |
+| `is_regime_capitulation` | `BOOLEAN` | No | `TRUE` on entry crossing: downward crossing of MVRV 1.0 or downward crossing of Mayer 0.8. |
+| `is_regime_froth` | `BOOLEAN` | No | `TRUE` if `(fng_value >= 80 AND mayer_multiple >= 2.0)` OR upward crossing of MVRV 2.5 OR upward crossing of Mayer 2.2. |
+| `open` | `DOUBLE` | Yes | Daily opening price in USD. |
+| `high` | `DOUBLE` | Yes | Daily intraday high in USD. |
+| `low` | `DOUBLE` | Yes | Daily intraday low in USD. |
+| `volume_base` | `DOUBLE` | Yes | Daily trading volume in BTC. |
+| `sma_200` | `DOUBLE` | Yes | 200-day rolling simple moving average close. |
+| `sample_count_7d` | `BIGINT` | No | Number of daily observations present in trailing 7-day window. |
+| `sample_count_30d` | `BIGINT` | No | Number of daily observations present in trailing 30-day window. |
+| `observed_hour_count` | `BIGINT` | Yes | Observed hourly candle count in calendar day. |
+| `is_complete` | `BOOLEAN` | Yes | Full 24-hour day completeness flag. |
+| `source` | `VARCHAR` | Yes | Originating exchange identifier (`coinbase_exchange`). |
 
 ---
 

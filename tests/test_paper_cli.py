@@ -47,8 +47,8 @@ def test_cli_paper_init_success(cli_db: Path, capsys: pytest.CaptureFixture[str]
     assert code == 0
     out = capsys.readouterr().out
     assert "Initialized forward paper portfolio 'default' with $1,000.00 USD" in out
-    assert "$700.00 Base Cash" in out
-    assert "$300.00 Tactical Reserve" in out
+    assert "$400.00 Base Cash" in out
+    assert "$600.00 Tactical Reserve" in out
 
 
 def test_cli_paper_init_invalid_capital(cli_db: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -70,6 +70,8 @@ def test_cli_paper_step_success(cli_db: Path, capsys: pytest.CaptureFixture[str]
             "2026-09-18",
             "--daily-budget",
             "15.0",
+            "--execution-mode",
+            "MANUAL_FORCE",
             "--db-path",
             str(cli_db),
         ]
@@ -80,6 +82,31 @@ def test_cli_paper_step_success(cli_db: Path, capsys: pytest.CaptureFixture[str]
     assert "Side: BUY" in out
     assert "Gross: $15.00" in out
     assert "Portfolio Equity:" in out
+
+
+def test_cli_paper_step_pacing_guard_chop_no_action(
+    cli_db: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    main(["paper", "init", "--db-path", str(cli_db)])
+    capsys.readouterr()
+
+    code = main(
+        [
+            "paper",
+            "step",
+            "--date",
+            "2026-09-18",
+            "--db-path",
+            str(cli_db),
+        ]
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "[2026-09-18]" in out
+    assert "Side: NO_ACTION" in out
+    assert "Signal: NO_ACTION" in out
+    assert "Gross: $0.00" in out
+    assert "Fee: $0.0000" in out
 
 
 def test_cli_paper_step_force_spot_price(cli_db: Path, capsys: pytest.CaptureFixture[str]) -> None:

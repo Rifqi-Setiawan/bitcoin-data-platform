@@ -63,6 +63,8 @@ def generate_executive_summary_id(
         AllocationAction.STANDARD_DCA: "DCA Standar",
         AllocationAction.DEFENSIVE_HOLD: "Tahan Defensif",
         AllocationAction.EMERGENCY_HALT: "Pembekuan Darurat (Circuit Breaker)",
+        AllocationAction.DATA_UNAVAILABLE: "Data Tidak Tersedia (Fail-Closed)",
+        AllocationAction.HEARTBEAT: "Heartbeat Ringan (Sideways Chop)",
     }
     action_str = action_map.get(proposed_action, proposed_action.value)
     t_str = target_date.isoformat()

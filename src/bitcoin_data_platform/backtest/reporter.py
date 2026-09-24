@@ -14,6 +14,8 @@ STRATEGY_DISPLAY_NAMES: dict[StrategyType, str] = {
     StrategyType.LUMP_SUM: "Lump Sum Buy & Hold",
     StrategyType.BLIND_DCA: "Blind DCA",
     StrategyType.DYNAMIC_RESERVE: "Dynamic Reserve DCA",
+    StrategyType.WEEKLY_BATCH_DCA: "Weekly Batch DCA",
+    StrategyType.EVENT_DRIVEN_REGIME: "Event-Driven Regime DCA",
 }
 
 

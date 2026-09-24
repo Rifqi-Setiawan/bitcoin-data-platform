@@ -510,19 +510,100 @@ class DuckDBManager:
 
         sql = """
         CREATE OR REPLACE VIEW mart_btc_usd_daily AS
+        WITH daily_base AS (
+            SELECT
+                source,
+                product_id,
+                DATE_TRUNC('day', candle_start_utc) AS trade_date_utc,
+                FIRST(open ORDER BY candle_start_utc) AS open,
+                MAX(high) AS high,
+                MIN(low) AS low,
+                LAST(close ORDER BY candle_start_utc) AS close,
+                SUM(volume_base) AS volume_base,
+                COUNT(*) AS observed_hour_count,
+                COUNT(*) = 24 AS is_complete,
+                MAX(candle_start_utc + INTERVAL 1 HOUR) AS observed_at_utc
+            FROM fact_market_candle_hourly
+            GROUP BY source, product_id, DATE_TRUNC('day', candle_start_utc)
+        )
         SELECT
             source,
             product_id,
-            DATE_TRUNC('day', candle_start_utc) AS trade_date_utc,
-            FIRST(open ORDER BY candle_start_utc) AS open,
-            MAX(high) AS high,
-            MIN(low) AS low,
-            LAST(close ORDER BY candle_start_utc) AS close,
-            SUM(volume_base) AS volume_base,
-            COUNT(*) AS observed_hour_count,
-            COUNT(*) = 24 AS is_complete
-        FROM fact_market_candle_hourly
-        GROUP BY source, product_id, DATE_TRUNC('day', candle_start_utc);
+            trade_date_utc,
+            open,
+            high,
+            low,
+            close,
+            volume_base,
+            observed_hour_count,
+            is_complete,
+            observed_at_utc,
+            MAX(high) OVER (
+                PARTITION BY source, product_id
+                ORDER BY trade_date_utc
+                RANGE BETWEEN INTERVAL 6 DAYS PRECEDING AND CURRENT ROW
+            ) AS rolling_peak_7d,
+            MAX(high) OVER (
+                PARTITION BY source, product_id
+                ORDER BY trade_date_utc
+                RANGE BETWEEN INTERVAL 29 DAYS PRECEDING AND CURRENT ROW
+            ) AS rolling_peak_30d,
+            COUNT(*) OVER (
+                PARTITION BY source, product_id
+                ORDER BY trade_date_utc
+                RANGE BETWEEN INTERVAL 6 DAYS PRECEDING AND CURRENT ROW
+            ) AS sample_count_7d,
+            COUNT(*) OVER (
+                PARTITION BY source, product_id
+                ORDER BY trade_date_utc
+                RANGE BETWEEN INTERVAL 29 DAYS PRECEDING AND CURRENT ROW
+            ) AS sample_count_30d,
+            CASE
+                WHEN MAX(high) OVER (
+                    PARTITION BY source, product_id
+                    ORDER BY trade_date_utc
+                    RANGE BETWEEN INTERVAL 6 DAYS PRECEDING AND CURRENT ROW
+                ) > 0 THEN
+                    LEAST(0.0, GREATEST(-1.0,
+                        (CAST(close AS DOUBLE) / CAST(MAX(high) OVER (
+                            PARTITION BY source, product_id
+                            ORDER BY trade_date_utc
+                            RANGE BETWEEN INTERVAL 6 DAYS PRECEDING AND CURRENT ROW
+                        ) AS DOUBLE)) - 1.0
+                    ))
+                ELSE 0.0
+            END AS drawdown_7d,
+            CASE
+                WHEN MAX(high) OVER (
+                    PARTITION BY source, product_id
+                    ORDER BY trade_date_utc
+                    RANGE BETWEEN INTERVAL 29 DAYS PRECEDING AND CURRENT ROW
+                ) > 0 THEN
+                    LEAST(0.0, GREATEST(-1.0,
+                        (CAST(close AS DOUBLE) / CAST(MAX(high) OVER (
+                            PARTITION BY source, product_id
+                            ORDER BY trade_date_utc
+                            RANGE BETWEEN INTERVAL 29 DAYS PRECEDING AND CURRENT ROW
+                        ) AS DOUBLE)) - 1.0
+                    ))
+                ELSE 0.0
+            END AS drawdown_30d,
+            CASE
+                WHEN CAST(trade_date_utc AS DATE) - CAST(LAG(trade_date_utc, 1) OVER (
+                    PARTITION BY source, product_id
+                    ORDER BY trade_date_utc
+                ) AS DATE) = 1
+                AND LAG(close, 1) OVER (
+                    PARTITION BY source, product_id
+                    ORDER BY trade_date_utc
+                ) > 0 THEN
+                    (CAST(close AS DOUBLE) / CAST(LAG(close, 1) OVER (
+                        PARTITION BY source, product_id
+                        ORDER BY trade_date_utc
+                    ) AS DOUBLE)) - 1.0
+                ELSE NULL
+            END AS return_24h
+        FROM daily_base;
         """
         con.execute(sql)
 
@@ -755,6 +836,239 @@ class DuckDBManager:
                 ELSE 'STANDARD_DCA'
             END AS investment_signal
         FROM base;
+        """
+        con.execute(sql)
+
+    def create_event_triggers_view(self) -> None:
+        """Create or replace conformed analytical view mart_btc_event_triggers."""
+        con = self.get_connection()
+        self.create_hourly_view()
+        self.create_daily_mart_view()
+        self.create_network_fact_view()
+        self.create_sentiment_table()
+
+        # Preserve base table fixture if created in test setup
+        with contextlib.suppress(Exception):
+            table_check = con.execute(
+                "SELECT table_type FROM information_schema.tables "
+                "WHERE table_name = 'mart_btc_event_triggers';"
+            ).fetchone()
+            if table_check and table_check[0] == "BASE TABLE":
+                return
+
+        # Check if mart_btc_usd_daily has pre-computed rolling columns
+        has_rolling = False
+        with contextlib.suppress(Exception):
+            cols = [
+                c[0]
+                for c in con.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'mart_btc_usd_daily';"
+                ).fetchall()
+            ]
+            has_rolling = "rolling_peak_7d" in cols and "observed_at_utc" in cols
+
+        if has_rolling:
+            base_cte = """
+            SELECT
+                m.source,
+                m.product_id,
+                CAST(m.trade_date_utc AS DATE) AS trade_date_utc,
+                COALESCE(
+                    m.observed_at_utc,
+                    CAST(m.trade_date_utc AS TIMESTAMPTZ) + INTERVAL 1 DAY
+                ) AS observed_at_utc,
+                CAST(m.open AS DOUBLE) AS open,
+                CAST(m.high AS DOUBLE) AS high,
+                CAST(m.low AS DOUBLE) AS low,
+                CAST(m.close AS DOUBLE) AS close,
+                CAST(m.volume_base AS DOUBLE) AS volume_base,
+                m.observed_hour_count,
+                m.is_complete,
+                CAST(m.rolling_peak_7d AS DOUBLE) AS rolling_peak_7d,
+                CAST(m.rolling_peak_30d AS DOUBLE) AS rolling_peak_30d,
+                m.sample_count_7d,
+                m.sample_count_30d,
+                m.drawdown_7d,
+                m.drawdown_30d,
+                m.return_24h,
+                AVG(CAST(m.close AS DOUBLE)) OVER (
+                    PARTITION BY m.source, m.product_id
+                    ORDER BY m.trade_date_utc
+                    ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
+                ) AS sma_200,
+                CAST(m.close AS DOUBLE) / NULLIF(AVG(CAST(m.close AS DOUBLE)) OVER (
+                    PARTITION BY m.source, m.product_id
+                    ORDER BY m.trade_date_utc
+                    ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
+                ), 0.0) AS mayer_multiple,
+                CAST(n.mvrv_ratio AS DOUBLE) AS mvrv_ratio,
+                s.fng_value
+            FROM mart_btc_usd_daily m
+            LEFT JOIN fact_network_metrics_daily n
+                ON CAST(m.trade_date_utc AS DATE) = CAST(n.metric_date_utc AS DATE)
+            LEFT JOIN raw_crypto_sentiment_daily s
+                ON CAST(m.trade_date_utc AS DATE) = s.sentiment_date_utc
+            """
+        else:
+            base_cte = """
+            SELECT
+                m.source,
+                m.product_id,
+                CAST(m.trade_date_utc AS DATE) AS trade_date_utc,
+                CAST(m.trade_date_utc AS TIMESTAMPTZ) + INTERVAL 1 DAY AS observed_at_utc,
+                CAST(m.open AS DOUBLE) AS open,
+                CAST(m.high AS DOUBLE) AS high,
+                CAST(m.low AS DOUBLE) AS low,
+                CAST(m.close AS DOUBLE) AS close,
+                CAST(m.volume_base AS DOUBLE) AS volume_base,
+                m.observed_hour_count,
+                m.is_complete,
+                CAST(MAX(m.high) OVER (
+                    PARTITION BY m.source, m.product_id
+                    ORDER BY m.trade_date_utc
+                    RANGE BETWEEN INTERVAL 6 DAYS PRECEDING AND CURRENT ROW
+                ) AS DOUBLE) AS rolling_peak_7d,
+                CAST(MAX(m.high) OVER (
+                    PARTITION BY m.source, m.product_id
+                    ORDER BY m.trade_date_utc
+                    RANGE BETWEEN INTERVAL 29 DAYS PRECEDING AND CURRENT ROW
+                ) AS DOUBLE) AS rolling_peak_30d,
+                COUNT(*) OVER (
+                    PARTITION BY m.source, m.product_id
+                    ORDER BY m.trade_date_utc
+                    RANGE BETWEEN INTERVAL 6 DAYS PRECEDING AND CURRENT ROW
+                ) AS sample_count_7d,
+                COUNT(*) OVER (
+                    PARTITION BY m.source, m.product_id
+                    ORDER BY m.trade_date_utc
+                    RANGE BETWEEN INTERVAL 29 DAYS PRECEDING AND CURRENT ROW
+                ) AS sample_count_30d,
+                CASE
+                    WHEN MAX(m.high) OVER (
+                        PARTITION BY m.source, m.product_id
+                        ORDER BY m.trade_date_utc
+                        RANGE BETWEEN INTERVAL 6 DAYS PRECEDING AND CURRENT ROW
+                    ) > 0 THEN
+                        LEAST(0.0, GREATEST(-1.0,
+                            (CAST(m.close AS DOUBLE) / CAST(MAX(m.high) OVER (
+                                PARTITION BY m.source, m.product_id
+                                ORDER BY m.trade_date_utc
+                                RANGE BETWEEN INTERVAL 6 DAYS PRECEDING AND CURRENT ROW
+                            ) AS DOUBLE)) - 1.0
+                        ))
+                    ELSE 0.0
+                END AS drawdown_7d,
+                CASE
+                    WHEN MAX(m.high) OVER (
+                        PARTITION BY m.source, m.product_id
+                        ORDER BY m.trade_date_utc
+                        RANGE BETWEEN INTERVAL 29 DAYS PRECEDING AND CURRENT ROW
+                    ) > 0 THEN
+                        LEAST(0.0, GREATEST(-1.0,
+                            (CAST(m.close AS DOUBLE) / CAST(MAX(m.high) OVER (
+                                PARTITION BY m.source, m.product_id
+                                ORDER BY m.trade_date_utc
+                                RANGE BETWEEN INTERVAL 29 DAYS PRECEDING AND CURRENT ROW
+                            ) AS DOUBLE)) - 1.0
+                        ))
+                    ELSE 0.0
+                END AS drawdown_30d,
+                CASE
+                    WHEN CAST(m.trade_date_utc AS DATE) - CAST(LAG(m.trade_date_utc, 1) OVER (
+                        PARTITION BY m.source, m.product_id
+                        ORDER BY m.trade_date_utc
+                    ) AS DATE) = 1
+                    AND LAG(m.close, 1) OVER (
+                        PARTITION BY m.source, m.product_id
+                        ORDER BY m.trade_date_utc
+                    ) > 0 THEN
+                        (CAST(m.close AS DOUBLE) / CAST(LAG(m.close, 1) OVER (
+                            PARTITION BY m.source, m.product_id
+                            ORDER BY m.trade_date_utc
+                        ) AS DOUBLE)) - 1.0
+                    ELSE NULL
+                END AS return_24h,
+                AVG(CAST(m.close AS DOUBLE)) OVER (
+                    PARTITION BY m.source, m.product_id
+                    ORDER BY m.trade_date_utc
+                    ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
+                ) AS sma_200,
+                CAST(m.close AS DOUBLE) / NULLIF(AVG(CAST(m.close AS DOUBLE)) OVER (
+                    PARTITION BY m.source, m.product_id
+                    ORDER BY m.trade_date_utc
+                    ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
+                ), 0.0) AS mayer_multiple,
+                CAST(n.mvrv_ratio AS DOUBLE) AS mvrv_ratio,
+                s.fng_value
+            FROM mart_btc_usd_daily m
+            LEFT JOIN fact_network_metrics_daily n
+                ON CAST(m.trade_date_utc AS DATE) = CAST(n.metric_date_utc AS DATE)
+            LEFT JOIN raw_crypto_sentiment_daily s
+                ON CAST(m.trade_date_utc AS DATE) = s.sentiment_date_utc
+            """
+
+        sql = f"""
+        CREATE OR REPLACE VIEW mart_btc_event_triggers AS
+        WITH base AS (
+            {base_cte}
+        ),
+        with_prev AS (
+            SELECT
+                *,
+                LAST_VALUE(mvrv_ratio IGNORE NULLS) OVER (
+                    PARTITION BY source, product_id
+                    ORDER BY trade_date_utc
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                ) AS prev_mvrv_ratio,
+                LAST_VALUE(mayer_multiple IGNORE NULLS) OVER (
+                    PARTITION BY source, product_id
+                    ORDER BY trade_date_utc
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                ) AS prev_mayer_multiple
+            FROM base
+        )
+        SELECT
+            product_id,
+            trade_date_utc,
+            observed_at_utc,
+            close,
+            return_24h,
+            rolling_peak_7d,
+            rolling_peak_30d,
+            drawdown_7d,
+            drawdown_30d,
+            mvrv_ratio,
+            mayer_multiple,
+            fng_value,
+            (DAYOFWEEK(trade_date_utc) = 0) AS is_weekly_cadence_day,
+            (
+                COALESCE(return_24h <= -0.05, FALSE)
+                OR COALESCE(drawdown_7d <= -0.12, FALSE)
+            ) AS is_drawdown_event,
+            (
+                COALESCE(mvrv_ratio < 1.0 AND prev_mvrv_ratio >= 1.0, FALSE)
+                OR
+                COALESCE(mayer_multiple < 0.8 AND prev_mayer_multiple >= 0.8, FALSE)
+            ) AS is_regime_capitulation,
+            (
+                COALESCE(fng_value >= 80 AND mayer_multiple >= 2.0, FALSE)
+                OR
+                COALESCE(mvrv_ratio > 2.5 AND prev_mvrv_ratio <= 2.5, FALSE)
+                OR
+                COALESCE(mayer_multiple > 2.2 AND prev_mayer_multiple <= 2.2, FALSE)
+            ) AS is_regime_froth,
+            open,
+            high,
+            low,
+            volume_base,
+            sma_200,
+            sample_count_7d,
+            sample_count_30d,
+            observed_hour_count,
+            is_complete,
+            source
+        FROM with_prev;
         """
         con.execute(sql)
 
@@ -1664,6 +1978,7 @@ class DuckDBManager:
         self.create_investment_signals_view()
         self.create_macro_mart_view()
         self.create_committee_mart_view()
+        self.create_event_triggers_view()
 
     def record_run(
         self,
@@ -1948,11 +2263,11 @@ class DuckDBManager:
             "quality_checks": recent_checks,
         }
 
-    def execute_query(self, sql: str) -> list[dict[str, Any]]:
+    def execute_query(self, sql: str, params: Sequence[Any] | None = None) -> list[dict[str, Any]]:
         """Execute arbitrary SQL and return results as a list of dictionaries."""
         con = self.get_connection()
         try:
-            cursor = con.execute(sql)
+            cursor = con.execute(sql, params) if params is not None else con.execute(sql)
             if cursor.description is None:
                 return []
             try:
@@ -1971,3 +2286,35 @@ class DuckDBManager:
                 return [dict(zip(col_names, row, strict=True)) for row in rows]
         except Exception as exc:
             raise DuckDBManagerError(f"SQL execution error: {exc}") from exc
+
+    def get_event_triggers(
+        self,
+        product_id: str = "BTC-USD",
+        start_date: date | str | None = None,
+        end_date: date | str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Query mart_btc_event_triggers for a given product and date range.
+
+        Returns records in ascending chronological order.
+        """
+        self.create_event_triggers_view()
+        clauses = ["product_id = ?"]
+        params: list[Any] = [product_id]
+
+        if start_date is not None:
+            clauses.append("trade_date_utc >= ?")
+            params.append(str(start_date))
+        if end_date is not None:
+            clauses.append("trade_date_utc <= ?")
+            params.append(str(end_date))
+
+        where_clause = " AND ".join(clauses)
+        sql = f"""
+        SELECT *
+        FROM mart_btc_event_triggers
+        WHERE {where_clause}
+        ORDER BY trade_date_utc ASC;
+        """
+        return self.execute_query(sql, params)
+
+    query_event_triggers = get_event_triggers

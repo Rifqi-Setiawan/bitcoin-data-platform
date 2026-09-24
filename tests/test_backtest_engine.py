@@ -199,6 +199,42 @@ class TestBacktestEngineExecution:
         assert StrategyType.LUMP_SUM in summary.results
         assert StrategyType.BLIND_DCA in summary.results
         assert StrategyType.DYNAMIC_RESERVE in summary.results
+        assert StrategyType.WEEKLY_BATCH_DCA in summary.results
+        assert StrategyType.EVENT_DRIVEN_REGIME in summary.results
+
+    def test_weekly_batch_dca_simulation(self) -> None:
+        engine = BacktestEngine()
+        records = _create_test_records(count=14)  # 2 full weeks
+        config = BacktestConfig(
+            periodic_amount=100.0,
+            frequency=FrequencyType.DAILY,
+        )
+
+        res = engine.run_strategy(records, StrategyType.WEEKLY_BATCH_DCA, config)
+        assert res.total_contributed == 1400.0
+        assert len(res.daily_states) == 14
+        assert res.total_btc_accumulated > 0.0
+
+        # Non-cadence days should accumulate cash
+        non_cadence_states = [s for s in res.daily_states if "HOLD: Accumulating" in s.action_taken]
+        assert len(non_cadence_states) > 0
+
+    def test_event_driven_regime_simulation(self) -> None:
+        engine = BacktestEngine()
+        records = _create_test_records(count=14)
+        config = BacktestConfig(
+            periodic_amount=100.0,
+            frequency=FrequencyType.DAILY,
+        )
+
+        res = engine.run_strategy(records, StrategyType.EVENT_DRIVEN_REGIME, config)
+        assert res.total_contributed == 1400.0
+        assert len(res.daily_states) == 14
+        # Dual-pool accounting: tactical reserve pool should have capital
+        assert res.reserve_pool_peak > 0.0
+        for s in res.daily_states:
+            assert s.cash_balance >= -1e-6
+            assert s.reserve_cash_balance >= -1e-6
 
     def test_run_strategy_empty_records(self) -> None:
         engine = BacktestEngine()

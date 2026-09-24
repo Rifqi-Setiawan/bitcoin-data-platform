@@ -97,3 +97,11 @@ This log is intentionally lightweight. Promote a decision to a numbered ADR when
 - **Alternatives:** Autonomous AI self-healing agents, coupled pipeline error recovery loops, manual ad-hoc log grepping.
 - **Trade-offs:** Bounded self-healing covers only known taxonomies; unclassified failures still require human intervention.
 - **Reconsider when:** Pipeline moves to a distributed multi-node orchestrator with native cluster diagnostics. (See `D-012_DIAGNOSTICS_SELF_HEALING.md` for full evaluation).
+
+## D-018 — Event-Driven Regime Pacing with Dual-Pool Capital Isolation
+
+- **Decision:** Replace fixed daily purchases with a deterministic, safety-first FSM (`IDLE_CHOP`, `WEEKLY_CORE`, `SNIPER_DEPLOYMENT`, `FROTH_FREEZE`) and strictly isolate `00 Base` from `00 Tactical Reserve` capital.
+- **Reason:** Preserve finite dry powder through sideways regimes, batch routine acquisition weekly, and deploy bounded tactical tranches only on edge-triggered drawdown or capitulation events.
+- **Alternatives:** Fixed daily DCA, daily regime multipliers, a fungible cash pool, LLM-selected pacing, and an external streaming broker.
+- **Trade-offs:** Episode latching, immutable policy versions, and dual-pool accounting increase complexity; fail-closed behavior can miss opportunities during data outages.
+- **Reconsider when:** Intraday execution, concurrent writers, validated compound orders, or live venue reconciliation require a different execution architecture. (See `D-018_EVENT_DRIVEN_REGIME_PACING.md` for full evaluation).

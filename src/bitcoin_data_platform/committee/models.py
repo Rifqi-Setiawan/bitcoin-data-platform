@@ -37,6 +37,7 @@ class AllocationAction(StrEnum):
     DEFENSIVE_HOLD = "DEFENSIVE_HOLD"
     EMERGENCY_HALT = "EMERGENCY_HALT"
     DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
+    HEARTBEAT = "HEARTBEAT"
 
 
 @dataclass(frozen=True)

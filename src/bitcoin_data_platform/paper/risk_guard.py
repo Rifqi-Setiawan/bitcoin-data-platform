@@ -52,6 +52,12 @@ class RiskGuard:
         black_swan_flag: bool = False,
         composite_mni: float = 0.0,
         macro_event_proximity_minutes: int | None = None,
+        is_sniper: bool = False,
+        pool: str | None = None,
+        tactical_debits_48h: float = 0.0,
+        weekly_base_usd: float | None = None,
+        fng_value: int | None = None,
+        mayer_multiple: float | None = None,
     ) -> RiskCheckResult:
         """Validate proposed trade against institutional safety bounds."""
         # 1. Emergency Kill-Switch Check
@@ -95,7 +101,20 @@ class RiskGuard:
                 details={"composite_mni": composite_mni},
             )
 
-        # 5. Spot Price Sanity Checks
+        # 5. Overheat Lockout Check (Froth Freeze: FNG >= 80 & Mayer >= 2.0)
+        if (
+            fng_value is not None
+            and fng_value >= self.invariant_solver.FROTH_FNG_THRESHOLD
+            and mayer_multiple is not None
+            and mayer_multiple >= self.invariant_solver.FROTH_MAYER_THRESHOLD
+        ):
+            return RiskCheckResult(
+                allowed=False,
+                reason="CIRCUIT_BREAKER_TRIPPED: Overheat Lockout (FNG >= 80 & Mayer >= 2.0)",
+                details={"fng_value": fng_value, "mayer_multiple": mayer_multiple},
+            )
+
+        # 6. Spot Price Sanity Checks
         if spot_price <= 0.0:
             return RiskCheckResult(
                 allowed=False,
@@ -120,7 +139,7 @@ class RiskGuard:
                     },
                 )
 
-        # 6. Macro Event Policy Check
+        # 7. Macro Event Policy Check
         if macro_event and self.reject_on_macro and side.upper() == "BUY":
             return RiskCheckResult(
                 allowed=False,
@@ -128,7 +147,7 @@ class RiskGuard:
                 details={"macro_event": True},
             )
 
-        # 7. Solvency Checks
+        # 8. Solvency and Pool Isolation Checks
         if side.upper() == "BUY":
             if gross_amount_usd < 0.0:
                 return RiskCheckResult(
@@ -137,20 +156,110 @@ class RiskGuard:
                     details={"gross_amount_usd": gross_amount_usd},
                 )
 
-            available_cash = portfolio.total_cash
-            # Tolerance of 1e-6 to avoid floating point imprecision issues
-            if gross_amount_usd > available_cash + 1e-6:
-                return RiskCheckResult(
-                    allowed=False,
-                    reason=(
-                        f"Insufficient funds: gross ${gross_amount_usd:,.2f} "
-                        f"exceeds available cash ${available_cash:,.2f}"
-                    ),
-                    details={
-                        "gross_amount_usd": round(gross_amount_usd, 2),
-                        "available_cash": round(available_cash, 2),
-                    },
+            # Pool-specific isolation check
+            if pool in ("00_BASE", "BASE"):
+                if gross_amount_usd > portfolio.base_cash + 1e-6:
+                    return RiskCheckResult(
+                        allowed=False,
+                        reason=(
+                            f"Insufficient funds in Base Cash: gross ${gross_amount_usd:,.2f} "
+                            f"exceeds available ${portfolio.base_cash:,.2f}"
+                        ),
+                        details={
+                            "gross_amount_usd": round(gross_amount_usd, 2),
+                            "available_base_cash": round(portfolio.base_cash, 2),
+                        },
+                    )
+            elif pool in ("00_TACTICAL_RESERVE", "TACTICAL_RESERVE") or is_sniper:
+                if gross_amount_usd > portfolio.reserve_cash + 1e-6:
+                    return RiskCheckResult(
+                        allowed=False,
+                        reason=(
+                            f"Insufficient funds in Tactical Reserve: gross "
+                            f"${gross_amount_usd:,.2f} exceeds available "
+                            f"${portfolio.reserve_cash:,.2f}"
+                        ),
+                        details={
+                            "gross_amount_usd": round(gross_amount_usd, 2),
+                            "available_reserve_cash": round(portfolio.reserve_cash, 2),
+                        },
+                    )
+            else:
+                available_cash = portfolio.total_cash
+                if gross_amount_usd > available_cash + 1e-6:
+                    return RiskCheckResult(
+                        allowed=False,
+                        reason=(
+                            f"Insufficient funds: gross ${gross_amount_usd:,.2f} "
+                            f"exceeds available cash ${available_cash:,.2f}"
+                        ),
+                        details={
+                            "gross_amount_usd": round(gross_amount_usd, 2),
+                            "available_cash": round(available_cash, 2),
+                        },
+                    )
+
+            # 9. Dynamic Sniper Allocation Invariant (max 35% daily reserve cap)
+            if is_sniper:
+                max_sniper = portfolio.reserve_cash * self.invariant_solver.MAX_SNIPER_RESERVE_PCT
+                if gross_amount_usd > max_sniper + 1e-6:
+                    return RiskCheckResult(
+                        allowed=False,
+                        reason=(
+                            f"SNIPER_CAP_EXCEEDED: Gross ${gross_amount_usd:,.2f} exceeds "
+                            f"35% tactical reserve cap (${max_sniper:,.2f})"
+                        ),
+                        details={
+                            "gross_amount_usd": round(gross_amount_usd, 2),
+                            "max_sniper_cap": round(max_sniper, 2),
+                        },
+                    )
+
+            # 10. 48-Hour Velocity Bound on Tactical Reserve (max 40% in 48h)
+            is_tactical = is_sniper or pool in ("00_TACTICAL_RESERVE", "TACTICAL_RESERVE")
+            if is_tactical and portfolio.reserve_cash > 0.0:
+                opening_tactical = portfolio.reserve_cash + tactical_debits_48h
+                remaining_48h = max(
+                    0.0,
+                    (self.invariant_solver.MAX_48H_TACTICAL_PCT * opening_tactical)
+                    - tactical_debits_48h,
                 )
+                if gross_amount_usd > remaining_48h + 1e-6:
+                    return RiskCheckResult(
+                        allowed=False,
+                        reason=(
+                            f"TACTICAL_48H_CAP_EXCEEDED: Gross ${gross_amount_usd:,.2f} exceeds "
+                            f"remaining 48h velocity cap (${remaining_48h:,.2f})"
+                        ),
+                        details={
+                            "gross_amount_usd": round(gross_amount_usd, 2),
+                            "remaining_48h_cap": round(remaining_48h, 2),
+                        },
+                    )
+
+            # 11. Base Runway Guard (< 8 weeks halves weekly buy)
+            if (
+                pool in ("00_BASE", "BASE")
+                and weekly_base_usd is not None
+                and weekly_base_usd > 0.0
+                and portfolio.base_cash > 0.0
+            ):
+                runway = portfolio.base_cash / weekly_base_usd
+                if runway < self.invariant_solver.MIN_BASE_RUNWAY_WEEKS:
+                    max_allowed = (weekly_base_usd * self.invariant_solver.LOW_RUNWAY_FACTOR) + 1e-6
+                    if gross_amount_usd > max_allowed:
+                        return RiskCheckResult(
+                            allowed=False,
+                            reason=(
+                                f"BASE_RUNWAY_EXCEEDED: Base runway ({runway:.1f}w < 8w) "
+                                f"requires 50% weekly buy reduction to "
+                                f"${weekly_base_usd * self.invariant_solver.LOW_RUNWAY_FACTOR:,.2f}"
+                            ),
+                            details={
+                                "gross_amount_usd": round(gross_amount_usd, 2),
+                                "runway_weeks": round(runway, 1),
+                            },
+                        )
 
         return RiskCheckResult(
             allowed=True,
@@ -177,6 +286,11 @@ class RiskGuard:
         available_base_cash: float | None = None,
         available_reserve_cash: float | None = None,
         portfolio_drawdown: float = 0.0,
+        is_sniper: bool = False,
+        tactical_debits_48h: float = 0.0,
+        weekly_base_usd: float | None = None,
+        fng_value: int | None = None,
+        mayer_multiple: float | None = None,
     ) -> RiskCheckResult:
         """Validate proposed pre-trade state against institutional bounds (AutoHedge style)."""
         # Invariant solver hook for neuro-symbolic verification
@@ -191,6 +305,11 @@ class RiskGuard:
             portfolio_drawdown=portfolio_drawdown,
             spot_price=spot_price,
             last_validated_price=last_known_price,
+            is_sniper=is_sniper,
+            tactical_debits_48h=tactical_debits_48h,
+            weekly_base_usd=weekly_base_usd,
+            fng_value=fng_value,
+            mayer_multiple=mayer_multiple,
         )
 
         # 1. Emergency Kill-Switch Check

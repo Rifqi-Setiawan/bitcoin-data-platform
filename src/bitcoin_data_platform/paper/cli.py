@@ -73,6 +73,12 @@ def register_paper_cli(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         help="Daily budget slice for DCA allocation (default: 10.0).",
     )
     step_parser.add_argument(
+        "--execution-mode",
+        choices=["AUTO", "MANUAL_FORCE"],
+        default="AUTO",
+        help="Execution mode: AUTO (regime pacing) or MANUAL_FORCE (default: AUTO).",
+    )
+    step_parser.add_argument(
         "--force-spot-price",
         "--force-price",
         dest="force_spot_price",
@@ -189,11 +195,13 @@ def handle_paper_cli(args: argparse.Namespace) -> int:
                 return 2
 
             force_price = float(args.force_spot_price) if args.force_spot_price else None
+            exec_mode = getattr(args, "execution_mode", "AUTO")
 
             record = engine.step(
                 trade_date=t_date,
                 daily_budget=daily_budget,
                 force_spot_price=force_price,
+                execution_mode=exec_mode,
             )
 
             summary = engine.get_portfolio_summary()
@@ -235,8 +243,8 @@ def handle_paper_cli(args: argparse.Namespace) -> int:
                 f"Benchmark B&H (USD)   : ${summary.benchmark_equity:,.2f} "
                 f"(Alpha: {alpha_sign}${summary.outperformance_usd:,.2f} USD)\n\n"
                 f"Cash Holdings         : ${summary.total_cash:,.2f}\n"
-                f"  - Base Cash Pool    : ${summary.base_cash:,.2f} (70% pool)\n"
-                f"  - Tactical Reserve  : ${summary.reserve_cash:,.2f} (30% pool)\n\n"
+                f"  - Base Cash Pool    : ${summary.base_cash:,.2f} (40% pool)\n"
+                f"  - Tactical Reserve  : ${summary.reserve_cash:,.2f} (60% pool)\n\n"
                 f"Bitcoin Holdings      : {summary.btc_balance:.8f} BTC "
                 f"(≈ ${summary.btc_value_usd:,.2f} USD)\n"
                 f"Avg Purchase Price    : ${summary.avg_buy_price:,.2f} USD\n"

@@ -1,15 +1,15 @@
 """
 Laya Semantic Guardrail for Bitcoin Data Platform Committee Memorandums.
-Performs independent, read-only semantic audits of committee drafts against market facts and risk invariants.
-Operates on the fail-safe principle: Laya can flag or quarantine ambiguous/contradictory memos,
-but has ZERO execution authority, ZERO access to credentials, and CANNOT change position size or funds.
+Performs independent, read-only semantic audits of committee drafts against facts.
+Operates on the fail-safe principle: Laya can flag or quarantine ambiguous memos,
+but has ZERO execution authority and CANNOT change position size or funds.
 """
-from dataclasses import dataclass
+
 import json
 import logging
 import os
 import urllib.request
-from typing import Any
+from dataclasses import dataclass
 
 logger = logging.getLogger("bitcoin_data_platform.committee.laya_guardrail")
 
@@ -46,15 +46,18 @@ class LayaCommitteeGuardrail:
         """
         # 1. Deterministic heuristic check
         # Example: Action is EMERGENCY_HALT or DATA_UNAVAILABLE, but narrative promotes buying
-        summary_lower = f"{executive_summary} {macro_thesis} {valuation_thesis} {technical_thesis}".lower()
-        if proposed_action in ["EMERGENCY_HALT", "DATA_UNAVAILABLE"]:
-            if any(term in summary_lower for term in ["beli agresif", "strong buy", "aggressive accumulate"]):
-                return SemanticAuditVerdict(
-                    status="QUARANTINE",
-                    confidence=1.0,
-                    explanation="Direct semantic contradiction: Action is HALT but narrative recommends aggressive buy.",
-                    contradiction_detected=True,
-                )
+        theses = f"{executive_summary} {macro_thesis} {valuation_thesis} {technical_thesis}"
+        summary_lower = theses.lower()
+        buy_terms = ["beli agresif", "strong buy", "aggressive accumulate"]
+        if proposed_action in ["EMERGENCY_HALT", "DATA_UNAVAILABLE"] and any(
+            term in summary_lower for term in buy_terms
+        ):
+            return SemanticAuditVerdict(
+                status="QUARANTINE",
+                confidence=1.0,
+                explanation="Direct semantic contradiction: Action is HALT but narrative buys.",
+                contradiction_detected=True,
+            )
 
         # 2. Semantic evaluation via Laya System 1
         state_repr = (
@@ -65,15 +68,20 @@ class LayaCommitteeGuardrail:
         )
 
         try:
-            req_data = json.dumps({
-                "state": state_repr[:600],
-                "questions": {
-                    "is_contradictory": {
-                        "type": "noul",
-                        "instructions": "Does the narrative summary conflict with the market regime or action?",
-                    }
-                },
-            }).encode("utf-8")
+            req_data = json.dumps(
+                {
+                    "state": state_repr[:600],
+                    "questions": {
+                        "is_contradictory": {
+                            "type": "noul",
+                            "instructions": (
+                                "Does the narrative summary conflict "
+                                "with the market regime or action?"
+                            ),
+                        }
+                    },
+                }
+            ).encode("utf-8")
 
             req = urllib.request.Request(
                 self.endpoint_url,
@@ -87,10 +95,14 @@ class LayaCommitteeGuardrail:
                     answers = body.get("data", {}).get("answers", {})
                     contradiction_prob = answers.get("is_contradictory", {}).get("noul", 0.0)
                     if contradiction_prob >= 0.75:
+                        expl = (
+                            "Laya detected narrative contradiction "
+                            f"(score: {contradiction_prob:.2f})"
+                        )
                         return SemanticAuditVerdict(
                             status="REVIEW",
                             confidence=contradiction_prob,
-                            explanation=f"Laya detected potential narrative contradiction (score: {contradiction_prob:.2f})",
+                            explanation=expl,
                             contradiction_detected=True,
                         )
         except Exception as exc:

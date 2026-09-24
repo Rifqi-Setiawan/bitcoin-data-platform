@@ -281,3 +281,43 @@ class TestBacktestCLIExecution:
         assert "Lump Sum Buy & Hold" in captured.out
         assert "Blind DCA" in captured.out
         assert "Dynamic Reserve DCA" in captured.out
+        assert "Weekly Batch DCA" in captured.out
+        assert "Event-Driven Regime DCA" in captured.out
+
+    def test_backtest_new_strategies_cli_options(self, tmp_path: Path) -> None:
+        db_file = tmp_path / "test.duckdb"
+        db_file.touch()
+
+        mock_engine = MagicMock()
+        mock_records = [
+            BacktestDayRecord(
+                trade_date=date(2025, 1, 1),
+                market_close_usd=50000.0,
+            )
+        ]
+        mock_engine.load_data_from_duckdb.return_value = mock_records
+        mock_engine.run_strategy.return_value = _dummy_result(StrategyType.WEEKLY_BATCH_DCA)
+
+        exit_code_wb = main(
+            [
+                "backtest",
+                "--db-path",
+                str(db_file),
+                "--strategy",
+                "weekly-batch-dca",
+            ],
+            backtest_engine=mock_engine,
+        )
+        assert exit_code_wb == 0
+
+        exit_code_edr = main(
+            [
+                "backtest",
+                "--db-path",
+                str(db_file),
+                "--strategy",
+                "event-driven-regime",
+            ],
+            backtest_engine=mock_engine,
+        )
+        assert exit_code_edr == 0
